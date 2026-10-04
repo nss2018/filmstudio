@@ -198,26 +198,61 @@
 
   /* ==================== 镜头 ==================== */
 
-  function shotFor(kind, r, indoor, focus, beatSec) {
-    var dist = indoor ? 4.2 : 8.5;
+  /* ==================== 机位安全表（对齐 world.js 的墙距 / 雾距，改了那边要同步） ====================
+     CAM_R   室内房间可用半径 = 墙距 - 0.6 余量。室内机位按它收紧，否则穿墙后整帧只剩墙面和雾。
+     CAM_BOX 走廊型地点（街道两侧是楼、夜市两侧是墙）：机位钳进路廊 |x|≤x, |z|≤z，不能按圆钳。
+     CAM_DIST 走廊地点的机位距离（夜市雾 near 只有 8，按 8.5 拉机位必糊雾）。 */
+  var CAM_R = { cafe: 4.8, study: 4.3, lab: 4.8, kitchen: 3.8 };
+  var CAM_BOX = { street: { x: 4.5, z: 16 }, nightmarket: { x: 4.8, z: 16 } };
+  var CAM_DIST = { nightmarket: 5.2 };
+
+  function shotFor(kind, r, indoor, focus, place) {
+    var maxR = CAM_R[place] || 4.8;
+    var box = !indoor ? (CAM_BOX[place] || null) : null;
+    // 室内：注视点（mid）最多离房间中心 ~2.2m（build 里钳过），机位再远就穿墙——
+    // 过去室内也按 4.2m 给机位，厨房（墙距 4.4m）直接穿出去，画面只剩墙面和雾。
+    var dist = indoor ? Math.max(1.4, maxR - 2.2) : (CAM_DIST[place] || 8.5);
+    var cap = indoor ? dist : (CAM_DIST[place] || 13.5);   // 机位离注视点的水平距离上限
     var height = indoor ? 1.75 : 2.4;
     var f = focus || [0, 1.2, 0];
+    // 走廊地点：注视点收到路中线和廊中部——orbit 半径 4.2 会从注视点向外伸，
+    // 注视点太靠边（演员走位可到 z≈±14）机位照样出廊，所以 x、z 都要收。
+    if (box) f = [Math.max(-2, Math.min(2, f[0])), f[1], Math.max(4.3 - box.z, Math.min(box.z - 4.3, f[2]))];
     var ang = r.range(0, Math.PI * 2);
     var ca = Math.cos(ang), sa = Math.sin(ang);
     var s;
     switch (kind) {
       case 'establish':
-        s = { type: 'orbit', from: [r.range(15, 60), dist * 1.5, height + r.range(0, 1.2)], to: [r.range(-40, 40), dist * 1.35, height], target: f.slice(), fov: 46, ease: 'inOutCubic' };
+        // ⚠️ camera.js 的 orbit 约定：from/to = [角度°, 半径, 高度]，不是 xyz！
+        // 过去把 15~60 当 x 坐标传，被当成角度，碰巧半径 = dist*1.5 还能看；现在按约定正经生成。
+        // 走廊地点绕「路轴」转（target.x 归零），半径收到路宽内，不然机位扫进两侧楼体里。
+        var er, orbitT;
+        if (box) { er = 4.2; orbitT = [0, f[1], f[2]]; }
+        else if (indoor) { er = Math.min(dist * 1.5, cap); orbitT = f.slice(); }
+        else { er = dist * 1.5; orbitT = f.slice(); }
+        s = { type: 'orbit', from: [r.range(0, 360), er, height + r.range(0, 1.2)], to: [r.range(0, 360), er * 0.9, height], target: orbitT, fov: 46, ease: 'inOutCubic' };
         break;
       case 'push':
         s = { type: 'dolly_in', from: [f[0] + ca * dist, height, f[2] + sa * dist], to: [f[0] + ca * dist * 0.42, height * 0.92, f[2] + sa * dist * 0.42], target: f.slice(), fov: 44, fovTo: 36, ease: 'inOutCubic' };
         break;
       case 'track':
-        // dist 显式传给 follow：注视点两侧走弧线时保持原观看距离，别退到 max(4,|to-from|) 把主体拍远了
-        s = { type: indoor ? 'pan' : 'follow', from: [f[0] - ca * dist, height, f[2] - sa * dist], to: [f[0] + ca * dist, height, f[2] + sa * dist], target: f.slice(), dist: dist, fov: 42, ease: 'inOutQuad' };
+        if (box) {
+          // follow 会绕注视点全角扫（运行时 ±17°、恒距 dist），走廊两侧就是楼/墙，眼位必穿帮——
+          // 改成「横移 + 视线沿路轴」：眼位整段锁在廊内，观看感受仍是横向跟踪。
+          s = { type: 'pan', from: [f[0] - 1.8, height, f[2]], to: [f[0] + 1.8, height, f[2]], fov: 42, ease: 'inOutQuad' };
+        } else {
+          // dist 显式传给 follow：注视点两侧走弧线时保持原观看距离，别退到 max(4,|to-from|) 把主体拍远了
+          s = { type: indoor ? 'pan' : 'follow', from: [f[0] - ca * dist, height, f[2] - sa * dist], to: [f[0] + ca * dist, height, f[2] + sa * dist], target: f.slice(), dist: dist, fov: 42, ease: 'inOutQuad' };
+        }
         break;
       case 'orbit':
-        s = { type: 'push_orbit', from: [f[0] + ca * dist, height, f[2] + sa * dist], to: [f[0] + ca * dist * 0.55, height * 1.05, f[2] + sa * dist * 0.55], target: f.slice(), fov: 40, ease: 'inOutCubic', handheld: .6 };
+        if (box) {
+          // push_orbit 保持眼距绕注视点转 ±15°，注视点靠边时眼位照样扫进楼体——
+          // 改绕「路轴心」（target.x=0）的 orbit，半径 4.2 < 廊半宽，几何上保证不出廊。
+          s = { type: 'orbit', from: [r.range(0, 360), 4.2, height], to: [r.range(0, 360), 3.4, height + .8], target: [0, f[1], f[2]], fov: 40, ease: 'inOutCubic', handheld: .6 };
+        } else {
+          s = { type: 'push_orbit', from: [f[0] + ca * dist, height, f[2] + sa * dist], to: [f[0] + ca * dist * 0.55, height * 1.05, f[2] + sa * dist * 0.55], target: f.slice(), fov: 40, ease: 'inOutCubic', handheld: .6 };
+        }
         break;
       case 'pullout':
       default:
@@ -226,6 +261,28 @@
     }
     s.handheld = s.handheld === undefined ? (indoor ? .35 : .8) : s.handheld;
     s.breath = indoor ? .5 : 1;
+    // 机位安全钳：from/to 到注视点的水平距离不许超 cap（orbit 是 [角度,半径,高度] 语义，半径单独限）
+    if (s.type === 'orbit') {
+      if (indoor) {
+        var lim = Math.max(1.2, maxR - 2.2);
+        if (s.from[1] > lim) s.from[1] = lim;
+        if (s.to[1] > lim) s.to[1] = lim;
+      }
+    } else {
+      [s.from, s.to].forEach(function (p) {
+        var dx = p[0] - f[0], dz = p[2] - f[2], m = Math.hypot(dx, dz);
+        if (m > cap) { p[0] = f[0] + dx * cap / m; p[2] = f[2] + dz * cap / m; }
+        if (box) {
+          // 路廊钳：楼体/墙在两侧，机位的 x、z 分别钳进廊内
+          if (p[0] > box.x) p[0] = box.x; else if (p[0] < -box.x) p[0] = -box.x;
+          if (p[2] > box.z) p[2] = box.z; else if (p[2] < -box.z) p[2] = -box.z;
+        } else if (indoor) {
+          // 房间钳：墙在四周，机位到房间中心的水平距离也不许超 maxR
+          var m0 = Math.hypot(p[0], p[2]);
+          if (m0 > maxR) { p[0] *= maxR / m0; p[2] *= maxR / m0; }
+        }
+      });
+    }
     return s;
   }
 
@@ -314,6 +371,13 @@
           from = [r.range(-4, 4), 0, r.range(-3, 3)];
           to = [from[0] + r.range(-5, 5), 0, from[2] + r.range(-4, 4)];
         }
+        // 走廊地点两侧是楼/墙，走位（含飞行入场点）别拐进建筑里
+        var bc = CAM_BOX[place];
+        if (bc) {
+          var limX = bc.x - .6;
+          if (from[0] > limX) from[0] = limX; else if (from[0] < -limX) from[0] = -limX;
+          if (to[0] > limX) to[0] = limX; else if (to[0] < -limX) to[0] = -limX;
+        }
         return {
           id: ac.id, variant: ac.variant, action: ac.action,
           // ⚠️ 站位是 [x, 0, z]，z 必须取 from[2]；写 from[1] 会把所有角色压到 z=0 那条线上
@@ -337,7 +401,7 @@
         place: place,
         indoor: indoor,
         cast: cast,
-        shot: shotFor(plan[i] || 'push', r, indoor, mid),
+        shot: shotFor(plan[i] || 'push', r, indoor, mid, place),
         grade: Object.assign({}, GRADE[mood] || GRADE.day, { mood: mood }),
         durationBeats: beats,
         durationSec: r3(beats * spb)
@@ -498,6 +562,9 @@
     SPOTS: SPOTS,
     SHOT_PLAN: SHOT_PLAN,
     GRADE: GRADE,
-    RELATED: RELATED
+    RELATED: RELATED,
+    CAM_R: CAM_R,
+    CAM_BOX: CAM_BOX,
+    CAM_DIST: CAM_DIST
   };
 })(typeof window !== 'undefined' ? window : this);

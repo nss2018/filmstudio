@@ -385,6 +385,54 @@ ok('相机不会钻进地面', (() => {
   return c.eye[1] >= 0.25;
 })());
 
+/* ---------- 9b. 机位安全（回归：机位穿墙/穿楼 → 后面分段整帧只剩墙面/雾） ---------- */
+section('9b. 机位安全：室内不出墙、走廊不出廊、任何机位不糊进雾');
+{
+  const D = FS.director;
+  const CAM_R = D.CAM_R, CAM_BOX = D.CAM_BOX;
+  const INDOOR = { cafe: 1, study: 1, lab: 1, kitchen: 1 };
+  // 与 world.js 同步：各地雾的 near/far（改了那边要同步）
+  const FOG = { cafe: [7, 26], street: [16, 62], park: [18, 70], seaside: [22, 80], study: [6, 22], lab: [8, 28], kitchen: [6, 22], nightmarket: [8, 34] };
+  let bad = 0, msg = '';
+  FS.world.placeIds().forEach((place) => {
+    const maxR = CAM_R[place] || 14;
+    for (let seed = 1; seed <= 40 && bad < 3; seed++) {
+      // 5 段 = establish/push/track/orbit/pullout 全覆盖；keepPlace 强制落在这个地点
+      const scenes5 = [1, 2, 3, 4, 5].map((k) => ({ title: '', text: '第' + k + '段普通文案，命中不了地点词。' }));
+      const sbb = D.build({
+        title: '安全钳' + seed, scenes: scenes5,
+        bpm: 84, beats: 8, seed: seed * 7919 + place.length * 131, keepPlace: place
+      });
+      sbb.shots.forEach((sh) => {
+        const b2 = CAM_BOX[sh.place];
+        // 段落有 30% 概率切到 RELATED 地点，雾距/钳制判据必须按镜头自己的地点算
+        const fogOk = FOG[sh.place][0] + 0.25 * (FOG[sh.place][1] - FOG[sh.place][0]) + 0.5;
+        // 走廊地点禁止 follow / push_orbit：两者运行时绕注视点旋转，静态钳制管不住
+        if (b2 && (sh.shot.type === 'follow' || sh.shot.type === 'push_orbit')) {
+          bad++; msg = sh.place + ' 用了运行时旋转镜头 ' + sh.shot.type; return;
+        }
+        // 演员走位别拐进楼/墙里
+        if (b2) {
+          for (const c of sh.cast) for (const pt of [c.from, c.to]) {
+            if (Math.abs(pt[0]) > b2.x) { bad++; msg = sh.place + ' 演员进楼 x=' + pt[0].toFixed(2); return; }
+          }
+        }
+        for (const p of [0, .25, .5, .75, 1]) {
+          const cam = FS.camera.evalShot(sh.shot, p, 0);
+          const m = Math.hypot(cam.eye[0], cam.eye[2]);
+          if (INDOOR[sh.place] && m > (CAM_R[sh.place] || maxR) + 0.05) { bad++; msg = sh.place + ' 穿墙 r=' + m.toFixed(2) + ' p=' + p; return; }
+          if (b2 && (Math.abs(cam.eye[0]) > b2.x + 0.05 || Math.abs(cam.eye[2]) > b2.z + 0.05)) {
+            bad++; msg = sh.place + ' 出廊 eye=[' + cam.eye[0].toFixed(2) + ',' + cam.eye[2].toFixed(2) + '] p=' + p; return;
+          }
+          const d = Math.hypot(cam.eye[0] - cam.target[0], cam.eye[1] - cam.target[1], cam.eye[2] - cam.target[2]);
+          if (d > fogOk) { bad++; msg = sh.place + ' 糊雾 d=' + d.toFixed(2) + ' p=' + p; return; }
+        }
+      });
+    }
+  });
+  ok('8 地点 × 40 种子 × 全镜头：室内不出墙 / 走廊不出廊 / 不超雾距', bad === 0, bad ? msg : '');
+}
+
 /* ---------- 10. 导演层 ---------- */
 section('10. 导演层（文案 → 分镜）');
 const DS = [

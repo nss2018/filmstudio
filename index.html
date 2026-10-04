@@ -201,8 +201,37 @@
 
       <div class="card">
         <div class="card-hd"><h2>1. 填内容</h2></div>
-        <label class="fl">片名<input type="text" id="f-title" value="群论：结构之美"></label>
         <div class="field-row">
+          <label class="fl">画面引擎
+            <select id="f-engine">
+              <option value="2d">2D 母题（几何 / 公式 / 数据）</option>
+              <option value="3d">3D 生活场景（WebGL，人物 + 动物）</option>
+            </select>
+          </label>
+          <span class="mono dim" id="f-engine-tip">2D 母题适合讲道理，3D 适合讲生活</span>
+        </div>
+        <label class="fl">片名<input type="text" id="f-title" value="群论：结构之美"></label>
+
+        <!-- 3D 专属：导演面板 -->
+        <div id="f3d-panel" class="f3d-panel" hidden>
+          <div class="field-row">
+            <label class="fl">导演
+              <select id="f3d-mode">
+                <option value="local">本地（不联网、零 Key）</option>
+                <option value="llm">AI 导演（要 Key，可写提示词）</option>
+              </select>
+            </label>
+            <span class="mono dim" id="f3d-status">按文案自动分镜</span>
+          </div>
+          <div class="btn-row wrap">
+            <button id="f3d-go" class="btn primary">🎬 按文案生成分镜</button>
+            <button id="f3d-reroll" class="btn">🎲 换一版（同文案不同片）</button>
+          </div>
+          <div class="mf-rec" id="f3d-sb"><span class="dim">分镜摘要会写在这里：每段在哪、谁出场、什么镜头、什么光。</span></div>
+          <div class="hint">分镜是<b>种子驱动</b>的：同文案 + 同种子 = 同一部片子；点「换一版」换种子，地点走位、镜头、氛围都会变，但主角和叙事线不变。AI 导演只允许「调」，地点/角色/动作/镜头都按白名单校验，模型编的非法值会被本地规则顶掉。</div>
+        </div>
+
+        <div class="field-row" id="f-2d-row">
           <label class="fl">视觉母题
             <select id="f-template">
               <option value="concept">概念递进（标题浮现）</option>
@@ -261,9 +290,13 @@
           <h2>预览</h2>
           <span class="mono dim" id="f-clock">0.00s</span>
         </div>
-        <canvas id="stage" width="1280" height="720"></canvas>
+        <div id="stage-wrap">
+          <canvas id="stage" width="1280" height="720"></canvas>
+          <canvas id="gl" width="1280" height="720" hidden></canvas>
+        </div>
         <input type="range" id="f-scrub" min="0" max="1000" value="0">
         <div class="row-gap" id="f-scene-dots"></div>
+        <div class="hint" id="f-g3d" hidden></div>
       </div>
       <div class="card">
         <div class="card-hd"><h2>时间轴</h2></div>
@@ -284,6 +317,13 @@
 <script src="js/synth.js"></script>
 <script src="js/story.js"></script>
 <script src="js/factory.js"></script>
+<script src="js/gl/core.js"></script>
+<script src="js/gl/geom.js"></script>
+<script src="js/gl/camera.js"></script>
+<script src="js/gl/world.js"></script>
+<script src="js/gl/cast.js"></script>
+<script src="js/gl/render.js"></script>
+<script src="js/director.js"></script>
 <script src="js/roll.js"></script>
 <script src="js/script.js"></script>
 <script src="js/main.js"></script>

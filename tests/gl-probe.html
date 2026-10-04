@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>3D 引擎自检</title>
+<style>
+  body{margin:0;padding:16px;background:#0d1017;color:#e6ebf5;
+       font:13px/1.7 ui-monospace,Menlo,monospace}
+  h1{font-size:15px;margin:0 0 10px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
+  .cell{position:relative;background:#000;border:1px solid #2a3346;border-radius:8px;overflow:hidden}
+  .cell canvas{width:100%;height:auto;display:block}
+  .cell .tag{position:absolute;left:6px;top:5px;font-size:11px;color:#9fe;
+             background:rgba(0,0,0,.55);padding:1px 6px;border-radius:4px}
+  #diag{white-space:pre-wrap;background:#0b0e15;border:1px solid #2a3346;
+        border-radius:8px;padding:10px;font-size:12px;line-height:1.8}
+  .ok{color:#4dd0c7}.bad{color:#ff6b7a}.dim{color:#8896ad}
+  #gl{position:fixed;left:-9999px;top:0;width:1280px;height:720px}
+</style>
+</head>
+<body>
+<h1>3D 生活场景引擎 · 自检</h1>
+<div id="diag">跑起来…</div>
+<div class="grid" id="grid"></div>
+<canvas id="gl"></canvas>
+
+<script src="../js/gl/core.js"></script>
+<script src="../js/gl/geom.js"></script>
+<script src="../js/gl/camera.js"></script>
+<script src="../js/gl/world.js"></script>
+<script src="../js/gl/cast.js"></script>
+<script src="../js/gl/render.js"></script>
+<script src="../js/director.js"></script>
+<script>
+'use strict';
+var Q = new URLSearchParams(location.search);
+var GW = +(Q.get('w') || 1280), GH = +(Q.get('h') || 720), GN = +(Q.get('n') || 6);
+var glc = document.getElementById('gl'); glc.width = GW; glc.height = GH;
+
+var out = [];
+function log(s, cls) { out.push(cls ? '<span class="' + cls + '">' + s + '</span>' : s); }
+function flush() { document.getElementById('diag').innerHTML = out.join('\n'); }
+
+try {
+  log('[1] 加载模块 …', 'dim');
+
+  // ---- 分镜 ----
+  var scenes = [
+    { title: '清晨的巷口', text: '老人在街边买早点，猫从墙头跳下' },
+    { title: '第一班公交', text: '车穿过街道，人们各自赶路' },
+    { title: '公园长椅', text: '孩子追着蝴蝶跑过草地' },
+    { title: '海边黄昏', text: '鱼在浅水里游，鸟掠过海面' },
+    { title: '深夜食堂', text: '厨房的灯亮着，一碗热面' },
+    { title: '实验室的夜', text: '数据和试管，屏幕闪着光' }
+  ];
+  var sb = FS.director.build({ title: '城市的一天', scenes: scenes, bpm: 84, beats: 8, seed: 7 });
+  log('[2] 分镜: ' + sb.shots.length + ' 段 / 主场景 ' + sb.place + ' / 主角 ' + sb.hero +
+      ' / ' + sb.totalSec.toFixed(1) + 's', 'ok');
+  sb.shots.forEach(function (s) {
+    log('    段' + (s.index + 1) + ' ' + s.place + ' · ' + s.shot.type + ' · ' +
+        s.cast.map(function (c) { return c.id + ':' + c.action; }).join(',') + ' · ' + s.grade.mood);
+  });
+
+  // ---- 几何自检（不开 GL 也能查） ----
+  var G = FS.geom;
+  var probe = {
+    'box': G.box(1, 1, 1, [1, 0, 0]), 'sphere': G.sphere(1, 8, 6, [0, 1, 0]),
+    'cylinder': G.cylinder(1, .5, 2, 8, [0, 0, 1]), 'cone': G.cone(1, 2, 8, [1, 1, 0]),
+    'prism': G.prism(6, 1, 2, [1, 0, 1]), 'plane': G.plane(4, 4, 2, 2, null, [0, 1, 1]),
+    'terrain': G.terrain(8, 8, 6, 6, function (x, z) { return Math.sin(x) * .3; }, [.4, .4, .4]),
+    'extrude': G.extrude([[0, 0], [1, 0], [1, 1], [0, 1]], 1, [1, 1, 0]),
+    'blob': G.blob(1, 1, .5, function () { return .5; }, [.2, .8, .4])
+  };
+  var gmsg = Object.keys(probe).map(function (k) {
+    var g = probe[k];
+    return k + ':' + (g.idx.length / 3) + '面';
+  }).join(' ');
+  log('[3] 几何 ' + Object.keys(probe).length + ' 种 → ' + gmsg, 'ok');
+
+  // 面法线朝外检查（box 是最容易被写反的）
+  var box = probe.box, outward = 0, total = 0;
+  for (var i = 0; i < box.pos.length; i += 9) {
+    var cx = (box.pos[i] + box.pos[i + 3] + box.pos[i + 6]) / 3;
+    var cy = (box.pos[i + 1] + box.pos[i + 4] + box.pos[i + 7]) / 3;
+    var cz = (box.pos[i + 2] + box.pos[i + 5] + box.pos[i + 8]) / 3;
+    var d = cx * cx + cy * cy + cz * cz;
+    var dot = cx * box.nrm[i] + cy * box.nrm[i + 1] + cz * box.nrm[i + 2];
+    total++; if (dot > 0) outward++;
+  }
+  log('    box 面法线朝外: ' + outward + '/' + total + (outward === total ? ' ✓' : ' ✗ 有翻面'),
+      outward === total ? 'ok' : 'bad');
+
+  // ---- 建引擎 ----
+  var engine = FS.render3d.create(document.getElementById('gl'), { ctx: null });
+  engine.setStoryboard(sb);
+  engine.setSubtitles(true);
+  var p = engine.probe();
+  log('[0] 渲染分辨率 ' + GW + '×' + GH + ' / 取 ' + nShot + ' 段', 'dim');
+  log('[4] WebGL 引擎已建 · webgl2=' + p.webgl2 + ' · framebuffer=' + p.framebuffer +
+      ' · bloom=' + p.bloom, p.framebuffer ? 'ok' : 'bad');
+
+  // ---- 逐段渲一帧 ----
+  var grid = document.getElementById('grid');
+  var acc = 0, okFrames = 0, errs = [];
+  var nShot = Math.min(GN, sb.shots.length);
+  for (var k = 0; k < nShot; k++) {
+    var wrap = document.createElement('div'); wrap.className = 'cell';
+    var cv = document.createElement('canvas'); cv.width = 426; cv.height = 240;
+    var tag = document.createElement('div'); tag.className = 'tag';
+    wrap.appendChild(cv); wrap.appendChild(tag); grid.appendChild(wrap);
+    var t = acc + sb.shots[k].durationSec * 0.55;   // 取本段中后段，动作与镜头都展开了
+    acc += sb.shots[k].durationSec;
+    var ctx2 = cv.getContext('2d');
+    ctx2.fillStyle = '#000'; ctx2.fillRect(0, 0, cv.width, cv.height);
+    try {
+      var info = engine.drawAt(t, ctx2);
+      if (info) okFrames++;
+      tag.textContent = (k + 1) + '. ' + info.placeName + ' · ' + info.shotType;
+      // 顺便看这一帧到底画了东西没有（采样非黑像素比例）
+      var d = ctx2.getImageData(0, 0, cv.width, cv.height).data;
+      var lit = 0, sum = 0;
+      for (var q = 0; q < d.length; q += 4 * 37) {         // 抽样，别太慢
+        var lum = (d[q] + d[q + 1] + d[q + 2]) / 3;
+        sum += lum; if (lum > 12) lit++;
+      }
+      var samples = Math.ceil(d.length / (4 * 37));
+      var ratio = lit / samples, avg = sum / samples;
+      tag.textContent += ' · 亮像素 ' + (ratio * 100).toFixed(0) + '% · 均亮 ' + avg.toFixed(0);
+      log('    段' + (k + 1) + ' ' + info.placeName + ' 镜头' + info.shotType +
+          ' 光' + info.mood + ' 三角面' + (engine.stats().tris) +
+          ' 亮像素' + (ratio * 100).toFixed(0) + '% 均亮' + avg.toFixed(0),
+          (ratio > 0.02 && avg > 3) ? 'ok' : 'bad');
+    } catch (e) {
+      errs.push('段' + (k + 1) + ': ' + e.message);
+      log('    段' + (k + 1) + ' ✗ ' + e.message, 'bad');
+    }
+  }
+  log('[5] 渲染 ' + okFrames + '/' + nShot + ' 帧成功' +
+      (errs.length ? '，' + errs.length + ' 帧出错' : ''), okFrames === nShot ? 'ok' : 'bad');
+  var st = engine.stats();
+  log('[6] 资源: 场景缓存 ' + st.places + ' / 角色缓存 ' + st.casts + ' / 累计三角面 ' + st.tris, 'dim');
+  log('[7] 结论: ' + (okFrames === nShot && st.tris > 500 ? '引擎可用 ✓' : '有问题 ✗'),
+      okFrames === sb.shots.length && st.tris > 500 ? 'ok' : 'bad');
+} catch (e) {
+  log('✗ 整体异常: ' + e.message, 'bad');
+  if (e.stack) log(String(e.stack).split('\n').slice(0, 4).join('\n'), 'dim');
+}
+flush();
+</script>
+</body>
+</html>

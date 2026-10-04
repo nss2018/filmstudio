@@ -349,9 +349,10 @@
 
   /* ================== 宣传片生成器 ================== */
   var film = {
-    title: '群论：结构之美', template: 'concept', palette: 'ink',
+    title: '群论：结构之美', template: 'concept', palette: 'ink', engine: '2d',
     bpm: 84, beats: 8, scenes: [], music: true, sub: 'on',
-    custom: null          // 手动挑的配乐（音乐工厂出的曲子）；null = 按片名自动生成
+    custom: null,      // 手动挑的配乐（音乐工厂出的曲子）；null = 按片名自动生成
+    sb: null, sbSeed: null   // 3D 分镜脚本与其种子
   };
   var fBuf = null, fPlaying = false, fStart = 0, fNode = null, fT0 = 0, fRAF = null;
 
@@ -359,6 +360,7 @@
     film.title = $('f-title').value.trim() || '未命名';
     film.template = $('f-template').value;
     film.palette = $('f-palette').value;
+    film.engine = $('f-engine').value;      // '2d' | '3d'
     film.bpm = parseInt($('f-bpm').value, 10) || 84;
     film.beats = parseInt($('f-beats').value, 10) || 8;
     film.music = $('f-music').checked;
@@ -467,16 +469,147 @@
     var cv = $('stage');
     var g = cv.getContext('2d');
     g.clearRect(0, 0, cv.width, cv.height);
+    // 3D 模式：GL 渲染完由 render3d 自己 drawImage 回 stage 并叠字幕，
+    // 所以导出（captureStream(stage)）那条链路一行都不用改。
+    if (film.engine === '3d' && gl3d && gl3d.storyboard) { gl3d.draw(t); return; }
     FS.story.drawFrame(g, film, t);
   }
 
   function redraw() {
     var t = (+$('f-scrub').value) / 1000 * FS.story.timeline(film).total;
     $('f-clock').textContent = t.toFixed(2) + 's';
+    if (gl3d) gl3d.setSubtitles(film.sub !== 'off');   // 「2. 定节奏」里的字幕开关对 3D 也生效
     paint(t);
     drawTimeline();
     markDots(t);
+    showG3D();
   }
+
+  /* ================== 3D 生活场景：引擎 + 导演 ================== */
+  var gl3d = null, glFail = '';
+
+  function glEngine() {
+    if (gl3d || glFail) return gl3d;
+    try {
+      // out2d 传 stage 的 2D context：3D 帧 + 字幕都合成到它上面
+      gl3d = FS.render3d.create($('gl'), { ctx: $('stage').getContext('2d') });
+    } catch (e) {
+      glFail = e.message;
+      hint($('f3d-status'), '✗ WebGL 起不来：' + e.message, 'bad');
+      return null;
+    }
+    return gl3d;
+  }
+
+  function setEngine(v) {
+    readFilm();
+    $('f3d-panel').hidden = (v !== '3d');
+    $('f-2d-row').hidden = (v === '3d');
+    $('gl').hidden = (v !== '3d');
+    $('f-g3d').hidden = (v !== '3d');
+    $('f-engine-tip').textContent = v === '3d'
+      ? '3D：文案 → 地点 / 角色 / 动作 / 镜头'
+      : '2D 母题适合讲道理，3D 适合讲生活';
+    if (v === '3d') { if (glEngine()) runDirector('local'); }
+    else if (gl3d) { gl3d.clear(); }
+    redraw();
+  }
+
+  function directorOpts() {
+    return {
+      title: film.title, scenes: film.scenes, bpm: film.bpm, beats: film.beats,
+      seed: film.sbSeed === null ? undefined : film.sbSeed
+    };
+  }
+
+  function runDirector(mode) {
+    var eng = glEngine();
+    if (!eng) return;
+    if (film.sbSeed === null || film.sbSeed === undefined) {
+      // 没指定种子就按「片名 + 全部文案」定：同一份文案默认给同一部片子
+      film.sbSeed = FS.director.fnv(film.title + '|' +
+        film.scenes.map(function (s) { return (s.title || '') + (s.text || ''); }).join('|'));
+    }
+    var opts = directorOpts();
+    var sb = FS.director.build(opts);
+    if (mode === 'llm' && cfg && cfg.key) {
+      hint($('f3d-status'), 'AI 导演思考中…（本地分镜已备好，失败会回落）');
+      FS.director.askLLM(cfg, opts, sb).then(function (raw) {
+        if (raw) {
+          applySB(FS.director.mergeLLM(sb, raw));
+          hint($('f3d-status'), '✓ AI 分镜已合入（' + sb.shots.length + ' 段，非法值已按本地规则顶掉）', 'ok');
+        } else {
+          applySB(sb);
+          hint($('f3d-status'), '没拿到 AI 结果，用的本地分镜', 'ok');
+        }
+      })['catch'](function (e) {
+        applySB(sb);
+        hint($('f3d-status'), '✗ ' + e.message + '（已回落到本地分镜）', 'bad');
+      });
+    } else {
+      applySB(sb);
+      hint($('f3d-status'), '本地分镜（不联网）· 种子 ' + film.sbSeed, 'ok');
+    }
+  }
+
+  function applySB(sb) {
+    film.sb = sb;
+    var eng = glEngine();
+    if (eng) eng.setStoryboard(sb);
+    showSB(sb);
+    redraw();
+  }
+
+  function showSB(sb) {
+    var box = $('f3d-sb');
+    if (!box) return;
+    box.innerHTML = '';
+    var place = FS.world.placeById(sb.place) || {};
+    var hero = FS.cast.castById(sb.hero) || {};
+    var head = document.createElement('div');
+    head.className = 'mf-head';
+    head.textContent = sb.title + ' · 主场景 ' + (place.name || sb.place) +
+      ' · 主角 ' + (hero.name || sb.hero) +
+      ' · ' + sb.totalSec.toFixed(1) + 's / ' + sb.shots.length + ' 段' +
+      ' · 种子 ' + sb.seed + (sb.source === 'llm' ? ' · AI 导演' : ' · 本地导演');
+    box.appendChild(head);
+    var grid = document.createElement('div');
+    grid.className = 'mf-grid';
+    sb.shots.forEach(function (s) {
+      var d = document.createElement('span');
+      d.className = 'mf-chip';
+      var who = s.cast.map(function (c) {
+        return (FS.cast.castById(c.id) || {}).name || c.id;
+      }).join('、');
+      d.innerHTML = '<b>段' + (s.index + 1) + '</b>' + ((FS.world.placeById(s.place) || {}).name || s.place) +
+        ' · ' + who + ' · ' + s.shot.type + ' · ' + (s.grade.label || s.grade.mood);
+      grid.appendChild(d);
+    });
+    box.appendChild(grid);
+  }
+
+  /** 底部实时状态：当前段 / 地点 / 镜头 / 三角面数 */
+  function showG3D() {
+    var el = $('f-g3d');
+    if (!el) return;
+    if (film.engine !== '3d') { el.hidden = true; return; }
+    el.hidden = false;
+    if (glFail) { hint(el, 'WebGL 不可用：' + glFail, 'bad'); return; }
+    if (!gl3d || !gl3d.lastInfo) { hint(el, gl3d ? '点「按文案生成分镜」开始' : 'WebGL 还没初始化'); return; }
+    var i = gl3d.lastInfo;
+    var st = gl3d.stats();
+    hint(el, '第 ' + (i.shotIndex + 1) + ' 段 · ' + i.placeName + ' · 镜头 ' + i.shotType +
+      ' · ' + i.mood + ' · 出场 ' + (i.cast.join('、') || '（无角色）') +
+      ' · 三角面 ' + st.tris + ' · 场景缓存 ' + st.places + ' · ' + (st.bloom ? '辉光开' : '辉光关'), 'ok');
+  }
+
+  $('f-engine').addEventListener('change', function () { setEngine(this.value); });
+  $('f3d-go').addEventListener('click', function () { runDirector($('f3d-mode').value); });
+  $('f3d-reroll').addEventListener('click', function () {
+    // 换种子 = 同一部文案换一版分镜：地点走位、镜头、氛围都会变，主角不变
+    film.sbSeed = (FS.director.fnv(String(film.sbSeed) + '|reroll') + 7919) >>> 0;
+    runDirector($('f3d-mode').value);
+  });
 
   function filmStop() {
     fPlaying = false;
@@ -532,7 +665,7 @@
   $('f-preview').addEventListener('click', function () { fPlaying ? filmStop() : filmPlay(); });
   $('f-stop').addEventListener('click', filmStop);
 
-  ['f-title', 'f-template', 'f-palette', 'f-bpm', 'f-beats'].forEach(function (id) {
+  ['f-title', 'f-template', 'f-palette', 'f-bpm', 'f-beats', 'f-sub'].forEach(function (id) {
     $(id).addEventListener('change', function () { readFilm(); redraw(); });
     $(id).addEventListener('input', function () { readFilm(); redraw(); });
   });
@@ -778,6 +911,9 @@
     var rec = pickMime();
     bits.push('视频录制 ' + (rec !== null ? '✓' : '✗'));
     bits.push('WAV 编码 ✓');
+    // 3D 引擎不真正建上下文（那会吃掉一张纹理），只报能力；真正起不来时 f3d-status 会给人话错误
+    var hasGL = !!(root.WebGL2RenderingContext || root.WebGLRenderingContext);
+    bits.push('3D 生活场景 ' + (hasGL ? '可用' : '✗ 无 WebGL'));
     $('probe-badge').textContent = '本环境：' + bits.join(' · ');
   }
 

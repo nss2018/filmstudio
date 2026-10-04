@@ -246,10 +246,25 @@
     return obj;
   }
 
-  /** 拉一次 LLM。opts: {base, key, model, topic, example, mood, count} */
-  function llm(opts) {
-    if (!opts || !opts.key) return Promise['reject'](new Error('先填 API Key'));
-    var base = (opts.base || '').replace(/\/+$/, '');
+  /** 从一次 /chat/completions 响应里取出 content（网关有的会包一层文本） */
+  function extractContent(txt) {
+    var j = null;
+    try { j = JSON.parse(txt); } catch (err) { /* 有些网关会包一层文本，往下再试 */ }
+    if (!j && txt) {
+      var m = /\{[\s\S]*\}/.exec(txt);
+      if (m) { try { j = JSON.parse(m[0]); } catch (err) {} }
+    }
+    if (!j) throw new Error('上游返回了非 JSON：' + String(txt).slice(0, 120));
+    var content = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+    if (!content) throw new Error('上游没返回 choices[0].message.content');
+    return content;
+  }
+
+  /** 通用 LLM 通道：自带 base 补全、90s 超时、401/404/CORS 的人话报错。
+   *  导演层（分镜脚本）也走这个，所以 CORS 那套提示只需要维护一份。 */
+  function callApi(cfg, promptStr, parseFn) {
+    if (!cfg || !cfg.key) return Promise['reject'](new Error('先填 API Key'));
+    var base = (cfg.base || '').replace(/\/+$/, '');
     if (!base) base = 'https://api.deepseek.com/v1';
     if (!/\/v\d+$/.test(base)) base += '/v1';       // 容错：没写版本段自动补
     var ctrl = (root.AbortController ? new root.AbortController() : null);
@@ -257,37 +272,37 @@
 
     return fetch(base + '/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + opts.key },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key },
       body: JSON.stringify({
-        model: opts.model || 'deepseek-chat',
+        model: cfg.model || 'deepseek-chat',
         temperature: 0.9,
-        messages: [{ role: 'user', content: PROMPT(opts) }]
+        messages: [{ role: 'user', content: promptStr }]
       }),
       signal: ctrl ? ctrl.signal : undefined
     }).then(function (res) {
       return res.text().then(function (txt) {
-        var j = null;
-        try { j = JSON.parse(txt); } catch (err) { /* 有些网关会包一层文本，往下再试 */ }
-        if (!j && txt) {
-          var m = /\{[\s\S]*\}/.exec(txt);
-          if (m) { try { j = JSON.parse(m[0]); } catch (err) {} }
-        }
-        if (!j) throw new Error('上游返回了非 JSON：' + txt.slice(0, 120));
         if (res.status === 401 || res.status === 403) throw new Error('Key 被拒（' + res.status + '）—— 检查 Key 和 base 地址');
         if (res.status === 404) throw new Error('404 —— base 地址不像 OpenAI 兼容端点，应该是 https://xxx/v1 这种');
-        if (j.error) throw new Error((j.error.message || j.error.code || '上游报错'));
-        var content = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-        if (!content) throw new Error('上游没返回 choices[0].message.content');
-        var out = parse(content);
-        out.advice = advice(out.scenes, opts.bpm);
-        return out;
+        var j = null;
+        try { j = JSON.parse(txt); } catch (err) { /* 下面 extractContent 再兜一次 */ }
+        if (j && j.error) throw new Error((j.error.message || j.error.code || '上游报错'));
+        return parseFn(extractContent(txt));
       });
     })['catch'](function (err) {
       var msg = err && err.message ? err.message : String(err);
-      if (/Failed to fetch|NetworkError|CORS|Load failed/i.test(msg))
-        throw new Error('直连被浏览器拦了（CORS）。两个办法：① 换支持跨域的服务；② 用仓库里的 workers/proxy.js 挂个 Cloudflare Worker 当自动代理。');
+      if (/Failed to fetch|NetworkError|CORS|Load failed|aborted/i.test(msg))
+        throw new Error('直连被浏览器拦了（CORS）或超时。两个办法：① 换支持跨域的服务；② 用仓库里的 workers/proxy.js 挂个 Cloudflare Worker 当自动代理。');
       throw err;
     })['finally'](function () { clearTimeout(timer); });
+  }
+
+  /** 拉一次 LLM 生成文案。opts: {base, key, model, topic, example, mood, count} */
+  function llm(opts) {
+    return callApi(opts, PROMPT(opts), function (content) {
+      var out = parse(content);
+      out.advice = advice(out.scenes, opts.bpm);
+      return out;
+    });
   }
 
   /* ---------------- 本地凭据（只存本机） ---------------- */
@@ -318,6 +333,7 @@
 
   FS.script = {
     local: local, llm: llm, generate: generate, parse: parse, PROMPT: PROMPT,
+    callApi: callApi, extractContent: extractContent,
     advice: advice, PRESETS: PRESETS, MOODS: MOODS,
     loadCfg: loadCfg, saveCfg: saveCfg,
     // 给测试用

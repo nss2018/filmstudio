@@ -10,6 +10,12 @@ require(path.join(__dirname, '..', 'js', 'wav.js'));
 require(path.join(__dirname, '..', 'js', 'synth.js'));
 require(path.join(__dirname, '..', 'js', 'story.js'));
 require(path.join(__dirname, '..', 'js', 'factory.js'));
+require(path.join(__dirname, '..', 'js', 'gl', 'core.js'));
+require(path.join(__dirname, '..', 'js', 'gl', 'geom.js'));
+require(path.join(__dirname, '..', 'js', 'gl', 'camera.js'));
+require(path.join(__dirname, '..', 'js', 'gl', 'world.js'));
+require(path.join(__dirname, '..', 'js', 'gl', 'cast.js'));
+require(path.join(__dirname, '..', 'js', 'director.js'));
 const FS = global.FS;
 
 let pass = 0, fail = 0;
@@ -234,6 +240,233 @@ ok('宣传片配乐能覆盖画面总长', filmMusic.score.duration >= 4 * 8 * 6
 const factoryParsed = FS.parseScore(FS.factory.toText(filmMusic.score));
 ok('工厂产物 -> parseScore 后音符都带上 t',
   factoryParsed.tracks.every((t) => t.notes.every((n) => typeof n.t === 'number' && isFinite(n.t))));
+
+/* ---------- 6. 3D 引擎：数学 / 几何 / 场景 / 角色 / 镜头 ---------- */
+section('6. 3D 引擎逻辑层（数学 / 几何 / 场景 / 角色 / 镜头）');
+const M4 = FS.gl.M4;
+const G = FS.geom;
+
+// 矩阵
+const idM = M4.fromTRS([1, 2, 3], [0, 0, 0], [1, 1, 1]);
+const p0 = M4.transformPoint(idM, [0, 0, 0]);
+ok('fromTRS 把原点平移到目标位置', Math.abs(p0[0] - 1) < 1e-6 && Math.abs(p0[1] - 2) < 1e-6 && Math.abs(p0[2] - 3) < 1e-6,
+  '(' + p0.map((v) => v.toFixed(1)).join(',') + ')');
+ok('invert 能把矩阵还原（乘积≈单位阵）', (() => {
+  const m = M4.fromTRS([2, -1, .5], [.3, .7, -.2], [1.4, .8, 2.2]);
+  const inv = M4.invert(m);
+  const prod = M4.multiply(m, inv);
+  return Math.abs(prod[0] - 1) < 1e-4 && Math.abs(prod[5] - 1) < 1e-4 &&
+         Math.abs(prod[10] - 1) < 1e-4 && Math.abs(prod[12]) < 1e-4;
+})());
+ok('lookAt 会把目标放到相机前方', (() => {
+  const view = M4.lookAt([0, 0, 5], [0, 0, 0], [0, 1, 0]);
+  const v = M4.transformPoint(view, [0, 0, 0]);
+  return Math.abs(v[2] + 5) < 1e-4;   // 目标在 eye 前方 5 米 → 视图空间 z = -5
+})());
+ok('perspective 产生合法投影矩阵', (() => {
+  const pr = M4.perspective(Math.PI / 4, 16 / 9, .1, 100);
+  return pr[11] === -1 && pr[0] > 0 && pr[5] > 0;
+})());
+
+// 几何
+const gBox = G.box(1, 2, 3, [1, 0, 0]);
+ok('box = 12 个三角面', gBox.idx.length / 3 === 12, '(' + gBox.idx.length / 3 + ')');
+ok('box 每个面的法线都朝外', (() => {          // 回归：面序写反会导致整个场景「里外翻」
+  let okAll = 0, total = 0;
+  for (let i = 0; i < gBox.pos.length; i += 9) {
+    const cx = (gBox.pos[i] + gBox.pos[i + 3] + gBox.pos[i + 6]) / 3;
+    const cy = (gBox.pos[i + 1] + gBox.pos[i + 4] + gBox.pos[i + 7]) / 3;
+    const cz = (gBox.pos[i + 2] + gBox.pos[i + 5] + gBox.pos[i + 8]) / 3;
+    total++;
+    if (cx * gBox.nrm[i] + cy * gBox.nrm[i + 1] + cz * gBox.nrm[i + 2] > 0) okAll++;
+  }
+  return okAll === total;
+})());
+ok('地形法线朝上', (() => {
+  const t = G.terrain(8, 8, 6, 6, (x, z) => Math.sin(x) * .3 + Math.cos(z) * .2, [.4, .5, .4]);
+  for (let i = 1; i < t.nrm.length; i += 3) if (t.nrm[i] <= 0) return false;
+  return t.idx.length > 0;
+})());
+ok('xform 不改顶点数、法线仍是单位向量', (() => {
+  const s = G.sphere(1, 8, 6, [1, 1, 1]);
+  const before = s.pos.length / 3;
+  G.xform(s, [1, 2, 3], [.4, .2, .1], [2, 1, .5]);
+  let unit = true;
+  for (let i = 0; i < s.nrm.length; i += 3) {
+    if (Math.abs(Math.hypot(s.nrm[i], s.nrm[i + 1], s.nrm[i + 2]) - 1) > 1e-3) unit = false;
+  }
+  return s.pos.length / 3 === before && unit;
+})());
+ok('merge 会把索引整体后移（不会画到别人的顶点）', (() => {
+  const m = G.merge([G.box(1, 1, 1, [1, 0, 0]), G.box(1, 1, 1, [0, 1, 0])]);
+  // 两个 box = 2 × 12 三角 = 72 个索引，顶点 2 × 12 = 24 个
+  return m.idx.length === 72 && Math.max(...m.idx) === m.pos.length / 3 - 1;
+})());
+ok('非均匀缩放后法线仍朝外（逆转置生效）', (() => {
+  const b = G.box(1, 1, 1, [1, 1, 1]);
+  G.xform(b, [0, 0, 0], [.5, 0, 0], [3, .4, 3]);
+  let okAll = 0, total = 0;
+  for (let i = 0; i < b.pos.length; i += 9) {
+    const cx = (b.pos[i] + b.pos[i + 3] + b.pos[i + 6]) / 3;
+    const cy = (b.pos[i + 1] + b.pos[i + 4] + b.pos[i + 7]) / 3;
+    const cz = (b.pos[i + 2] + b.pos[i + 5] + b.pos[i + 8]) / 3;
+    total++;
+    if (cx * b.nrm[i] + cy * b.nrm[i + 1] + cz * b.nrm[i + 2] > 0) okAll++;
+  }
+  return okAll === total;
+})());
+
+// 场景
+section('7. 生活场景库');
+ok('地点库有 8 个场景', FS.world.PLACES.length === 8, '(' + FS.world.PLACES.map((p) => p.name).join('、') + ')');
+const placeStat = FS.world.PLACES.map((p) => {
+  const b = FS.world.buildPlace(p.id, FS.director.mkRng(1).f);
+  return { id: p.id, tris: b.solid.idx.length / 3, lights: b.lights.length, sky: !!b.sky, fog: !!b.fog };
+});
+ok('每个地点都能建出几何（且三角面数不是零）', placeStat.every((s) => s.tris > 200),
+  placeStat.map((s) => s.id + ':' + s.tris).join(' '));
+ok('每个地点都有灯光 / 天空 / 雾参数', placeStat.every((s) => s.lights >= 1 && s.sky && s.fog));
+ok('同一地点两次 build 结果一致（固定种子，可复现）', (() => {
+  const a = FS.world.buildPlace('cafe', FS.director.mkRng(1).f);
+  const b = FS.world.buildPlace('cafe', FS.director.mkRng(1).f);
+  return a.solid.idx.length === b.solid.idx.length && a.solid.pos.length === b.solid.pos.length;
+})());
+ok('不同地点的几何不同（不是复制粘贴）', (() => {
+  const a = FS.world.buildPlace('cafe', FS.director.mkRng(1).f);
+  const b = FS.world.buildPlace('seaside', FS.director.mkRng(1).f);
+  return a.solid.idx.length !== b.solid.idx.length || Math.abs(a.solid.pos[0] - b.solid.pos[0]) > 1e-6;
+})());
+
+// 角色
+section('8. 人物 / 动物');
+ok('角色库有 7 个角色', FS.cast.CASTS.length === 7, '(' + FS.cast.CASTS.map((c) => c.name).join('、') + ')');
+ok('每个角色都能实例化并算出姿态', (() => {
+  const rng = FS.director.mkRng(3).f;
+  return FS.cast.CASTS.every((c) => {
+    const inst = FS.cast.instantiate(c.id, rng, 'a');
+    if (!inst || !inst.parts.length) return false;
+    const acts = Object.keys(inst.def.poses || {});
+    return acts.every((a) => {
+      const pose = FS.cast.pose(inst, a, 1.5, { x: 0, y: 0, z: 0, yaw: 0 }, 1);
+      return pose.length === inst.parts.length && pose.every((p) => p.pos.every((v) => isFinite(v)));
+    });
+  });
+})());
+ok('动画真的随时间变化（t 不同 → 姿态不同）', (() => {
+  const inst = FS.cast.instantiate('person', FS.director.mkRng(3).f, 'a');
+  const a = FS.cast.pose(inst, 'walk', 0, { x: 0, y: 0, z: 0, yaw: 0 }, 1);
+  const b = FS.cast.pose(inst, 'walk', 0.7, { x: 0, y: 0, z: 0, yaw: 0 }, 1);
+  return JSON.stringify(a.map((p) => p.rot)) !== JSON.stringify(b.map((p) => p.rot));
+})());
+ok('角色内部没有 Math.random（否则同分镜每次长得不一样）',
+  !/Math\.random/.test(require('fs').readFileSync(path.join(__dirname, '..', 'js', 'gl', 'cast.js'), 'utf8').replace(/rng \|\| Math\.random/, '')));
+
+// 镜头
+section('9. 镜头脚本');
+['dolly_in', 'dolly_out', 'orbit', 'crane', 'pan', 'follow', 'static', 'push_orbit'].forEach((tp) => {
+  let err = null;
+  for (const p of [0, .3, .5, .8, 1]) {
+    try {
+      const c = FS.camera.evalShot({ type: tp, from: [3, 2, 6], to: [1, 1.6, 3], target: [0, 1.2, 0], fov: 42 }, p, p * 4);
+      if (c.eye.some((v) => !isFinite(v))) throw new Error('NaN');
+    } catch (e) { err = e; }
+  }
+  ok('镜头 ' + tp + ' 全程无异常且不出 NaN', !err, err ? err.message : '');
+});
+ok('orbit 的机位到目标距离 ≈ 设定半径', (() => {
+  const c = FS.camera.evalShot({ type: 'orbit', from: [0, 8, 2.5], to: [40, 8, 2.5], target: [0, 1.2, 0] }, .5, 0);
+  const d = Math.hypot(c.eye[0] - 0, c.eye[2] - 0);
+  return Math.abs(d - 8) < 1e-3;
+})());
+ok('相机不会钻进地面', (() => {
+  const c = FS.camera.evalShot({ type: 'static', from: [0, -3, 4], to: [0, -3, 4], target: [0, 1, 0] }, .5, 0);
+  return c.eye[1] >= 0.25;
+})());
+
+/* ---------- 10. 导演层 ---------- */
+section('10. 导演层（文案 → 分镜）');
+const DS = [
+  { title: '清晨的巷口', text: '老人在街边买早点，猫从墙头跳下' },
+  { title: '公园长椅', text: '孩子追着蝴蝶跑过草地' },
+  { title: '海边黄昏', text: '鱼在浅水里游，鸟掠过海面' },
+  { title: '实验室的夜', text: '数据和试管，屏幕闪着光' }
+];
+const sb = FS.director.build({ title: '城市的一天', scenes: DS, bpm: 84, beats: 8, seed: 7 });
+ok('分镜段数与文案段落一致', sb.shots.length === DS.length);
+ok('每段都有地点 / 镜头 / 角色 / 氛围', sb.shots.every((s) =>
+  !!s.place && !!s.shot.type && Array.isArray(s.cast) && s.cast.length >= 1 && !!s.grade.mood));
+
+// ⚠️ 回归：词权重。「实验室的夜」里 nightmarket 的「夜」权重 1、lab 的「实验」权重 2，
+//    不加权的话实验室片会被判成夜市片。
+ok('更具体的地点词压过宽泛词（实验室 ≠ 夜市）',
+  FS.director.build({ title: '实验室的夜', scenes: [{ title: '发现', text: '实验室的数据和试管' }], seed: 42 }).place === 'lab',
+  '(得到 ' + FS.director.build({ title: '实验室的夜', scenes: [{ title: '发现', text: '实验室的数据和试管' }], seed: 42 }).place + ')');
+
+// ⚠️ 回归：站位是 [x,0,z]，曾经把 z 写成 from[1]（y，恒为 0），所有角色被压在一条线上
+ok('角色站位有纵深（不是全挤在 z=0）', (() => {
+  const s2 = FS.director.build({ title: '城市', scenes: [
+    { title: 'a', text: '街边早餐' }, { title: 'b', text: '公交穿过街道' },
+    { title: 'c', text: '公园长椅' }, { title: 'd', text: '海边的黄昏' }], seed: 7 });
+  const zs = s2.shots.flatMap((s) => s.cast.map((c) => c.from[2]));
+  return zs.filter((z) => Math.abs(z) > 0.2).length >= zs.length / 2;
+})(), '(z 取值 ' + sb.shots.map((s) => s.cast[0].from[2]).join(',') + ')');
+
+ok('室内不出现跑 / 飞 / 跳 / 游', (() => {
+  const bad = [];
+  ['cafe', 'study', 'lab', 'kitchen'].forEach((p) => {
+    Object.keys(FS.director.ACTIONS).forEach((c) => {
+      FS.director.legalActions(c, p).forEach((a) => {
+        if (['run', 'fly', 'hop', 'swim'].includes(a)) bad.push(c + '@' + p + '=' + a);
+      });
+    });
+  });
+  return bad.length === 0;
+})(), '');
+ok('角色 × 地点 合理性穷举（56 组合）全部能修好', (() => {
+  const r = FS.director.mkRng(1);
+  let bad = 0;
+  FS.world.placeIds().forEach((p) => {
+    Object.keys(FS.director.HABITAT).forEach((c) => {
+      const fix = FS.director.reconcile(c, p, r);
+      if ((FS.director.HABITAT[fix.cast] || []).indexOf(fix.place) < 0) bad++;
+    });
+  });
+  return bad === 0;
+})());
+ok('鱼不会留在室内（被换成该场景能容纳的角色或换地点）', (() => {
+  const r = FS.director.mkRng(9);
+  const fix = FS.director.reconcile('fish', 'cafe', r);
+  return (FS.director.HABITAT[fix.cast] || []).indexOf(fix.place) >= 0;
+})());
+ok('分镜可复现：同文案同种子 → 逐字段相同', (() => {
+  const a = FS.director.build({ title: 'x', scenes: DS, seed: 99 });
+  const b = FS.director.build({ title: 'x', scenes: DS, seed: 99 });
+  return JSON.stringify(a) === JSON.stringify(b);
+})());
+ok('换种子 → 换分镜（20 个种子给出多套走位/镜头）', (() => {
+  const sigs = {};
+  for (let i = 0; i < 20; i++) {
+    const s = FS.director.build({ title: 'x', scenes: DS, seed: i });
+    sigs[s.shots.map((x) => x.place + x.shot.type + x.cast.map((c) => c.action).join()).join('|')] = 1;
+  }
+  const n = Object.keys(sigs).length;
+  return n >= 12 ? ('(' + n + '/20 套不同)') : ('只有 ' + n + ' 套，种子没起作用');
+})());
+ok('LLM 分镜并入后仍然合法（非法地点/角色被顶掉）', (() => {
+  const merged = FS.director.mergeLLM(sb, {
+    shots: [
+      { place: 'mars_base', shotType: 'weird', mood: 'neon', cast: ['person', 'dragon'] },
+      { place: 'seaside', shotType: 'track', mood: 'dusk', cast: ['fish'] }
+    ]
+  });
+  return merged.shots.every((s) => !!FS.world.placeById(s.place) &&
+    s.cast.every((c) => !!FS.cast.castById(c.id) && (FS.director.HABITAT[c.id] || []).includes(s.place)) &&
+    !!FS.director.GRADE[s.grade.mood] && !!s.shot.type);
+})());
+ok('LLM 段落数超出文案时不会多出镜头', (() => {
+  const merged = FS.director.mergeLLM(sb, { shots: [{}, {}, {}, {}, {}, {}] });
+  return merged.shots.length === sb.shots.length;
+})());
 
 FS.renderScore(FS.parseScore(JSON.stringify(filmMusic.score)), { sampleRate: 22050 }).then(
   () => ok('工厂出的曲子能离线渲染出音频', true),

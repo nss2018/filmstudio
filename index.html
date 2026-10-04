@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>科普宣传片工坊 · 配乐 + 渲染，一处出片</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◉</span>
+    <div>
+      <h1>科普宣传片工坊</h1>
+      <p class="sub">浏览器里写乐谱、渲片子 · 零安装 · 手机也能用</p>
+    </div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="music">配乐台</button>
+    <button class="tab" data-tab="film">宣传片生成器</button>
+  </nav>
+</header>
+
+<main>
+<!-- ============ 配乐台 ============ -->
+<section class="panel active" id="panel-music">
+  <div class="grid-2">
+    <div class="col">
+      <div class="card">
+        <div class="card-hd">
+          <h2>乐谱（cues.json）</h2>
+          <div class="row-gap" id="presets">
+            <button class="chip" data-preset="ui">UI 音效</button>
+            <button class="chip" data-preset="loop">循环 BGM</button>
+            <button class="chip" data-preset="basic">五音阶</button>
+          </div>
+        </div>
+        <textarea id="score-input" spellcheck="false" rows="18"></textarea>
+        <div class="hint" id="score-status">— 改完自动解析 —</div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd"><h2>轨内参数</h2></div>
+        <div class="field-row">
+          <label>采样率
+            <select id="sr-select"><option>22050</option><option selected>44100</option></select>
+          </label>
+          <label>总音量 <span id="master-val" class="mono">0.8</span>
+            <input type="range" id="master" min="0.1" max="1" step="0.05" value="0.8">
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <div class="card-hd">
+          <h2>试听</h2>
+          <span class="mono dim" id="score-meta"></span>
+        </div>
+        <canvas id="wave" width="640" height="150"></canvas>
+        <div class="btn-row">
+          <button id="btn-play" class="btn primary">▶ 播放</button>
+          <button id="btn-stop" class="btn">■ 停止</button>
+          <button id="btn-wav" class="btn">↓ 导出 wav</button>
+        </div>
+        <div class="progress"><div class="progress-bar" id="play-progress"></div></div>
+        <div class="hint">波形是渲染出来的真实音频，不是图片。导出是 16-bit PCM wav，可直接剪进视频。</div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd"><h2>怎么读这份乐谱</h2></div>
+        <pre class="code">{
+  "bpm": 84,
+  "tracks": [
+    {"name":"pad",  "instrument":"pad",  "notes":[{"p":"C3","t":0,"d":1.8}]},
+    {"name":"drums","instrument":"kick", "loop":1.0, "notes":["x","-","x","-"]}
+  ]
+}</pre>
+        <ul class="tips">
+          <li><code>p</code> 音名（C4 / F#2 / Bb3），<code>t</code> 起始秒，<code>d</code> 时长秒</li>
+          <li><code>t</code> 省略则按 <code>beat</code>/<code>beats</code> 写拍号</li>
+          <li><code>loop</code> 给秒数，整轨按这个周期反复铺（BGM 用）</li>
+          <li>数组里 <code>"x"</code> 敲一下、<code>"-"</code> 空一拍</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 宣传片生成器 ============ -->
+<section class="panel" id="panel-film">
+  <div class="grid-2">
+    <div class="col">
+      <div class="card">
+        <div class="card-hd"><h2>1. 填内容</h2></div>
+        <label class="fl">片名<input type="text" id="f-title" value="群论：结构之美"></label>
+        <div class="field-row">
+          <label class="fl">视觉母题
+            <select id="f-template">
+              <option value="concept">概念递进（标题浮现）</option>
+              <option value="formula">公式推导（逐项高亮）</option>
+              <option value="bars">数据演进（柱子生长）</option>
+              <option value="split">对比演示（左右分屏）</option>
+              <option value="geo">几何演化（多边形）</option>
+            </select>
+          </label>
+          <label class="fl">配色
+            <select id="f-palette">
+              <option value="ink">墨蓝（深底+青）</option>
+              <option value="sunset">暖橙（深紫底）</option>
+              <option value="mint">薄荷（近白底）</option>
+              <option value="mono">纯黑白</option>
+            </select>
+          </label>
+        </div>
+        <div id="f-scenes" class="scenes"></div>
+        <button id="f-add-scene" class="btn ghost">+ 加一段</button>
+      </div>
+
+      <div class="card">
+        <div class="card-hd"><h2>2. 定节奏</h2></div>
+        <div class="field-row">
+          <label>BPM <input type="number" id="f-bpm" value="84" min="40" max="200"></label>
+          <label>每段拍数 <input type="number" id="f-beats" value="8" min="2" max="32"></label>
+          <label>字幕 <select id="f-sub"><option value="on">开</option><option value="off">关</option></select></label>
+        </div>
+        <div class="row-gap" style="margin-top:10px">
+          <label class="chk"><input type="checkbox" id="f-music" checked> 自动生成配乐</label>
+        </div>
+        <div class="hint" id="f-timing"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd"><h2>3. 导出</h2></div>
+        <div class="btn-row wrap">
+          <button id="f-preview" class="btn">▶ 预览播放</button>
+          <button id="f-stop" class="btn">■ 停止</button>
+          <button id="f-render" class="btn primary">⦿ 导出视频（含配乐）</button>
+          <button id="f-audio" class="btn">↓ 只导配乐</button>
+          <button id="f-frames" class="btn">↓ 逐帧 PNG</button>
+          <button id="f-project" class="btn ghost">↓ 项目备份</button>
+        </div>
+        <div class="hint" id="f-status">预览用实时渲染；导出走 MediaRecorder，把画面和音轨一起录进一个文件。</div>
+        <div class="progress" id="f-progress-wrap"><div class="progress-bar" id="f-progress"></div></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <div class="card-hd">
+          <h2>预览</h2>
+          <span class="mono dim" id="f-clock">0.00s</span>
+        </div>
+        <canvas id="stage" width="1280" height="720"></canvas>
+        <input type="range" id="f-scrub" min="0" max="1000" value="0">
+        <div class="row-gap" id="f-scene-dots"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><h2>时间轴</h2></div>
+        <canvas id="timeline" width="640" height="90"></canvas>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <span>纯前端运行：合成、渲染、编码全在浏览器里，不上传任何数据。</span>
+  <span class="mono" id="probe-badge"></span>
+</footer>
+
+<script src="js/score.js"></script>
+<script src="js/wav.js"></script>
+<script src="js/synth.js"></script>
+<script src="js/story.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

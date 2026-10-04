@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>浏览器自检 · 科普宣传片工坊</title>
+<link rel="stylesheet" href="../css/app.css"></head>
+<body>
+<main style="max-width:960px">
+  <pre id="out" style="background:#0b0e15;color:#cfe;padding:12px;border:1px solid #2a3346;border-radius:10px;font-size:12px;white-space:pre-wrap">running...</pre>
+  <canvas id="grid" width="960" height="380" style="width:100%;background:#000;border:1px solid #2a3346;border-radius:10px"></canvas>
+  <p style="color:#889;font-size:11px">上排：concept · formula · bars &nbsp; 下排：split · geo · geo(暖橙配色)</p>
+</main>
+<script src="../js/score.js"></script>
+<script src="../js/wav.js"></script>
+<script src="../js/synth.js"></script>
+<script src="../js/story.js"></script>
+<script>
+var log = [];
+function say(s){ log.push(s); document.getElementById('out').textContent = log.join('\n'); }
+
+try {
+  var sc = FS.parseScore(JSON.stringify({bpm:84,tracks:[
+    {name:'pad',instrument:'pad',loop:8,notes:[{p:'C3',t:0,d:2},{p:'G3',t:4,d:2}]},
+    {name:'k',instrument:'kick',loop:8,notes:['x','-','x','-']}]}));
+  say('[1] parseScore ok  ' + FS.scoreInfo(sc).summary);
+
+  var TPL = FS.templates;
+  var film = {title:'结构之美',template:'concept',palette:'ink',bpm:84,beats:8,scenes:[
+    {title:'对称',text:'旋转后和自己重合'},
+    {title:'a²=e',text:'做两次回到原处'},
+    {title:'公理',text:'封闭 结合 逆元'},
+    {title:'群',text:'所有对称的集合'}]};
+  var tl = FS.story.timeline(film);
+  say('[2] timeline total=' + tl.total.toFixed(2) + 's marks=' + tl.marks.length);
+
+  var gc = document.createElement('canvas'); gc.width=FS.story.W; gc.height=FS.story.H;
+  var g = gc.getContext('2d');
+  var g2 = document.getElementById('grid').getContext('2d');
+  g2.fillStyle='#111'; g2.fillRect(0,0,960,380);
+  function cell(i,row,name,pal_,t){
+    film.template=name; if(pal_) film.palette=pal_;
+    FS.story.drawFrame(g,film,t);
+    g2.fillStyle='#000'; g2.fillRect(i*320,row*190,320,180);
+    g2.drawImage(gc, i*320, row*190, 320, 180);
+    film.palette='ink';
+  }
+  var mid = tl.marks[1].start + tl.marks[1].dur*0.55;
+  TPL.forEach(function(n,i){ cell(i,0,n,null,mid); say('[2] drawFrame '+n+' ok'); });
+  cell(0,1,'split',null,tl.marks[2].start+tl.marks[2].dur*0.8);
+  cell(1,1,'geo',null,tl.total*0.72);
+  cell(2,1,'geo','sunset',tl.total*0.8);
+
+  var fsc = FS.story.buildScore(film);
+  say('[3] buildScore ok  ' + FS.scoreInfo(fsc).summary);
+
+  // 真实链路：buildScore -> parseScore -> renderScore（漏掉 parseScore 会整段静音）
+  FS.renderScore(FS.parseScore(JSON.stringify(fsc)), {sampleRate:22050}).then(function(buf){
+    var wav = FS.encodeWav(buf);
+    var d = buf.getChannelData(0), peak=0, sum=0;
+    for (var i=0;i<d.length;i+=13){ var v=Math.abs(d[i]); if(v>peak)peak=v; sum+=v; }
+    say('[4] renderScore ok ' + buf.duration.toFixed(2) + 's  peak=' + peak.toFixed(3) +
+        '  rms=' + (sum/(d.length/13)).toFixed(3) + '  wav=' + wav.byteLength + 'B');
+    var m = ['video/webm;codecs=vp9,opus','video/webm','video/mp4'];
+    var ok = m.filter(function(x){ return root.MediaRecorder && MediaRecorder.isTypeSupported(x); });
+    say('[5] 录制支持 ' + JSON.stringify(ok));
+    say('[6] 全部通过');
+  })['catch'](function(e){ say('[4] FAIL: ' + e.message); say('[6] 未通过'); });
+} catch (e) {
+  say('[0] 脚本异常: ' + e.message + '\n' + (e.stack||''));
+}
+</script>
+</body></html>

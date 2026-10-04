@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>科普宣传片工坊 · 配乐 + 渲染，一处出片</title>
-<link rel="stylesheet" href="css/app.css?v=20261004c">
+<link rel="stylesheet" href="css/app.css?v=20261004d">
 </head>
 <body>
 <header class="topbar">
@@ -251,6 +251,11 @@
             </select>
           </label>
         </div>
+        <div class="row-gap" style="margin-top:10px">
+          <textarea id="f-bulk" rows="3" spellcheck="false" placeholder="整篇文案粘贴到这里（如《桃花源记》全文），点「自动分段」按句子拆成一段一幕" style="width:100%"></textarea>
+          <button id="f-split" class="btn">✂ 粘贴全文自动分段</button>
+          <div class="hint">每一段 = 视频里的一幕：正文会作为底部字幕显示并朗读（选了配音的话），文字里的关键词决定 3D 场景与角色。改完文案 3D 分镜会自动重排。</div>
+        </div>
         <div id="f-scenes" class="scenes"></div>
         <button id="f-add-scene" class="btn ghost">+ 加一段</button>
       </div>
@@ -261,6 +266,7 @@
           <label>BPM <input type="number" id="f-bpm" value="84" min="40" max="200"></label>
           <label>每段拍数 <input type="number" id="f-beats" value="8" min="2" max="32"></label>
           <label>字幕 <select id="f-sub"><option value="on">开</option><option value="off">关</option></select></label>
+          <label>配音 <select id="f-voice"><option value="">无</option><option value="zh-CN-YunxiNeural">云希·男</option><option value="zh-CN-XiaoxiaoNeural">晓晓·女</option><option value="zh-CN-YunyangNeural">云扬·播音</option></select></label>
         </div>
         <div class="row-gap" style="margin-top:10px">
           <label class="chk"><input type="checkbox" id="f-music" checked> 自动生成配乐</label>
@@ -313,21 +319,21 @@
   <span class="mono" id="probe-badge"></span>
 </footer>
 
-<script src="js/score.js?v=20261004c"></script>
-<script src="js/wav.js?v=20261004c"></script>
-<script src="js/synth.js?v=20261004c"></script>
-<script src="js/story.js?v=20261004c"></script>
-<script src="js/factory.js?v=20261004c"></script>
-<script src="js/gl/core.js?v=20261004c"></script>
-<script src="js/gl/lru.js?v=20261004c"></script>
-<script src="js/gl/geom.js?v=20261004c"></script>
-<script src="js/gl/camera.js?v=20261004c"></script>
-<script src="js/gl/world.js?v=20261004c"></script>
-<script src="js/gl/cast.js?v=20261004c"></script>
-<script src="js/gl/render.js?v=20261004c"></script>
-<script src="js/director.js?v=20261004c"></script>
-<script src="js/roll.js?v=20261004c"></script>
-<script src="js/script.js?v=20261004c"></script>
-<script src="js/main.js?v=20261004c"></script>
+<script src="js/score.js?v=20261004d"></script>
+<script src="js/wav.js?v=20261004d"></script>
+<script src="js/synth.js?v=20261004d"></script>
+<script src="js/story.js?v=20261004d"></script>
+<script src="js/factory.js?v=20261004d"></script>
+<script src="js/gl/core.js?v=20261004d"></script>
+<script src="js/gl/lru.js?v=20261004d"></script>
+<script src="js/gl/geom.js?v=20261004d"></script>
+<script src="js/gl/camera.js?v=20261004d"></script>
+<script src="js/gl/world.js?v=20261004d"></script>
+<script src="js/gl/cast.js?v=20261004d"></script>
+<script src="js/gl/render.js?v=20261004d"></script>
+<script src="js/director.js?v=20261004d"></script>
+<script src="js/roll.js?v=20261004d"></script>
+<script src="js/script.js?v=20261004d"></script>
+<script src="js/main.js?v=20261004d"></script>
 </body>
 </html>

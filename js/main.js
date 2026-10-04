@@ -405,16 +405,78 @@
       });
       readFilm();
       redraw();
+      sync3D();
     });
     [i1, i2].forEach(function (i) {
-      i.addEventListener('input', function () { readFilm(); redraw(); });
+      i.addEventListener('input', function () { readFilm(); redraw(); sync3D(); });
     });
     wrap.appendChild(idx); wrap.appendChild(body); wrap.appendChild(del);
     $('f-scenes').appendChild(wrap);
     // film.scenes 由 readFilm() 从 DOM 重建，这里不要 push，否则序号会整体错位
   }
 
-  $('f-add-scene').addEventListener('click', function () { addScene({ title: '第 ' + (film.scenes.length + 1) + ' 段', text: '' }); readFilm(); redraw(); });
+  $('f-add-scene').addEventListener('click', function () { addScene({ title: '第 ' + (film.scenes.length + 1) + ' 段', text: '' }); readFilm(); redraw(); sync3D(); });
+
+  /* 3D 分镜随文案自动重排：改文案不重建分镜 = 导出还是旧文案的画面（字幕缺失的根因）。
+     打字会连发 input，防抖 700ms；显式动作（自动分段）直接调 sync3DNow。 */
+  var sync3dTimer = 0;
+  function sync3DNow() {
+    if (film.engine !== '3d' || !gl3d) return;
+    readFilm();
+    film.sbSeed = null;                              // 文案变了，按新文案重算种子
+    runDirector('local');
+  }
+  function sync3D() {
+    clearTimeout(sync3dTimer);
+    sync3dTimer = setTimeout(sync3DNow, 700);
+  }
+
+  /* 粘贴全文自动分段：句号/问叹号切句，长句再按逗顿切，打包成每段 ≤24 字
+     （24 字约 5 秒旁白，正好装进默认 8 拍/段），碎句并入前段。 */
+  function splitNarration(text) {
+    var t = (text || '').replace(/\s+/g, '');
+    if (!t) return [];
+    var sentences = [], buf = '';
+    for (var i = 0; i < t.length; i++) {
+      buf += t[i];
+      if ('。！？!?；;…'.indexOf(t[i]) >= 0) { sentences.push(buf); buf = ''; }
+    }
+    if (buf) sentences.push(buf);
+    var pieces = [];
+    sentences.forEach(function (p) {
+      if (p.length <= 24) { pieces.push(p); return; }
+      var clauses = [], sub = '';
+      for (var j = 0; j < p.length; j++) {
+        sub += p[j];
+        if ('，,、：:'.indexOf(p[j]) >= 0 && sub.length >= 8) { clauses.push(sub); sub = ''; }
+      }
+      if (sub) clauses.push(sub);
+      var pack = '';
+      clauses.forEach(function (c) {
+        if (pack && (pack + c).length > 24) { pieces.push(pack); pack = c; }
+        else pack += c;
+      });
+      if (pack) pieces.push(pack);
+    });
+    var out = [];
+    pieces.forEach(function (p) {
+      // 无标点超长兜底：硬切 24 字
+      if (p.length > 24) {
+        for (var k = 0; k < p.length; k += 24) out.push(p.slice(k, k + 24));
+      } else if (out.length && (out[out.length - 1] + p).length <= 24) {
+        out[out.length - 1] += p;
+      } else out.push(p);
+    });
+    return out.slice(0, 24).map(function (s) { return { title: '', text: s }; });
+  }
+  $('f-split').addEventListener('click', function () {
+    var parts = splitNarration($('f-bulk').value);
+    if (!parts.length) { hint($('f-status'), '先把整篇文案粘到上面的框里', 'bad'); return; }
+    $('f-scenes').innerHTML = '';
+    parts.forEach(function (p) { addScene(p); });
+    readFilm(); redraw(); sync3DNow();
+    hint($('f-status'), '已拆成 ' + parts.length + ' 段，3D 分镜已按新文案重排', 'ok');
+  });
 
   function drawDots(tl) {
     var box = $('f-scene-dots');
@@ -635,6 +697,7 @@
     if (fRAF) root.cancelAnimationFrame(fRAF);
     fRAF = null;
     if (fNode) { try { fNode.stop(); } catch (e) {} fNode = null; }
+    narrStopAll();
     $('f-preview').textContent = '▶ 预览播放';
   }
 
@@ -643,20 +706,25 @@
     try { ctx(); } catch (e) { hint($('f-status'), '✗ ' + e.message, 'bad'); return; }
     var c = ctx();
     filmStop();
-    if (film.music) {
-      if (!fBuf) { hint($('f-status'), '配乐还没生成，先点『只导配乐』或直接开始的按钮', 'bad'); }
-      else {
-        fNode = c.createBufferSource();
-        fNode.buffer = fBuf;
-        fNode.connect(c.destination);
-        fStart = c.currentTime + 0.08;
-        fNode.start(fStart);
-      }
-    } else fStart = c.currentTime + 0.08;
-    fT0 = fStart;
-    fPlaying = true;
-    $('f-preview').textContent = '❚❚ 播放中';
-    tickFilm();
+    // 配音先合成好（有缓存就是秒回），再起播——预览时人声按时间轴精确排程
+    buildNarrPlan(film, c).then(function (plan) {
+      if (fPlaying) return;                        // 合成期间用户又点了停止/重播
+      if (film.music) {
+        if (!fBuf) { hint($('f-status'), '配乐还没生成，先点『只导配乐』或直接开始的按钮', 'bad'); }
+        else {
+          fNode = c.createBufferSource();
+          fNode.buffer = fBuf;
+          fNode.connect(c.destination);
+          fStart = c.currentTime + 0.08;
+          fNode.start(fStart);
+        }
+      } else fStart = c.currentTime + 0.08;
+      fT0 = fStart;
+      narrStartAt(plan, c, fT0, c.destination);
+      fPlaying = true;
+      $('f-preview').textContent = '❚❚ 播放中';
+      tickFilm();
+    });
   }
 
   function tickFilm() {
@@ -696,6 +764,62 @@
     if (film.custom) return film.custom.score;      // 手工挑的那首
     return FS.factory.forFilm(film).score;         // 按片名当主题：同片名可复现，不同片名必不同
   }
+  /* ---------------- 配音（服务器 edge-tts，ffmpeg 级中文音色） ---------------- */
+  var narrCache = {};          // 'voice|text' -> AudioBuffer，预览/导出共用
+  var fVoiceNodes = [];        // 正在响/已排程的配音源，停止时全停
+
+  function fetchNarr(text, voice, c) {
+    var key = voice + '|' + text;
+    if (narrCache[key]) return Promise.resolve(narrCache[key]);
+    return fetch('tts.php?voice=' + encodeURIComponent(voice) + '&text=' + encodeURIComponent(text))
+      .then(function (r) {
+        if (!r.ok) throw new Error('TTS 服务失败 ' + r.status + '（「' + text.slice(0, 10) + '…」）');
+        return r.arrayBuffer();
+      })
+      .then(function (ab) { return c.decodeAudioData(ab); })
+      .then(function (buf) { narrCache[key] = buf; return buf; });
+  }
+
+  /** 生成 [{at, buf}]：at = 该段在时间轴上的起点。按顺序合成，进度实时报状态条。 */
+  function buildNarrPlan(st, c) {
+    var voice = ($('f-voice') && $('f-voice').value) || '';
+    if (!voice) return Promise.resolve([]);
+    var texts = st.scenes.map(function (s) { return (s.text || '').trim(); });
+    var need = [];
+    texts.forEach(function (tx, i) { if (tx) need.push(i); });
+    if (!need.length) return Promise.resolve([]);
+    var tl = FS.story.timeline(st);
+    var items = [], done = 0;
+    hint($('f-status'), '合成配音 0/' + need.length + '…');
+    return need.reduce(function (chain, idx) {
+      return chain.then(function () {
+        return fetchNarr(texts[idx], voice, c).then(function (buf) {
+          done++;
+          hint($('f-status'), '合成配音 ' + done + '/' + need.length + '…');
+          items.push({ at: tl.marks[idx] ? tl.marks[idx].start : 0, buf: buf });
+        });
+      });
+    }, Promise.resolve()).then(function () {
+      hint($('f-status'), '✓ 配音就绪（' + need.length + ' 段）');
+      return items;
+    }, function (e) { hint($('f-status'), '✗ ' + e.message, 'bad'); throw e; });
+  }
+
+  function narrStartAt(plan, c, baseTime, dest1, dest2) {
+    plan.forEach(function (p) {
+      var src = c.createBufferSource();
+      src.buffer = p.buf;
+      src.connect(dest1);
+      if (dest2) src.connect(dest2);
+      src.start(baseTime + p.at);
+      fVoiceNodes.push(src);
+    });
+  }
+  function narrStopAll() {
+    fVoiceNodes.forEach(function (n) { try { n.stop(); n.disconnect(); } catch (e) {} });
+    fVoiceNodes = [];
+  }
+
   function filmRenderAudio() {
     var sc = FS.parseScore(JSON.stringify(filmCues()));   // 顺带校验，坏谱会给人话错误
     return FS.renderScore(sc, { sampleRate: 44100 });
@@ -762,7 +886,11 @@
     var stream = canPush ? probeStream : cv.captureStream(EXPORT_FPS);
     var track = stream.getVideoTracks()[0];
 
-    filmRenderAudio().then(function (buf) {
+    // 配音先合成（进度见状态条），再渲配乐，最后一起排进录制流
+    buildNarrPlan(snap, c).then(function (plan) {
+      return filmRenderAudio().then(function (buf) { return { buf: buf, plan: plan }; });
+    }).then(function (r) {
+      var buf = r.buf, plan = r.plan;
       if (snap.engine === '3d' && gl3d && sbSnap) gl3d.setStoryboard(sbSnap);
       var media = c.createMediaStreamDestination();
       var node = c.createBufferSource();
@@ -776,6 +904,7 @@
       rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
       rec.onstop = function () {
         filmStop();
+        narrStopAll();
         btn.disabled = false;
         var blob = new Blob(chunks, { type: mime || 'video/webm' });
         FS.download(blob, (snap.title || 'film') + (mime.indexOf('mp4') >= 0 ? '.mp4' : '.webm'));
@@ -788,6 +917,7 @@
       var frames = Math.max(1, Math.ceil(total * EXPORT_FPS));
       var t0Wall = c.currentTime + 0.12;
       node.start(t0Wall);
+      narrStartAt(plan, c, t0Wall, media, c.destination);   // 人声按时间轴录进流里 + 外放
       rec.start();
       fNode = node; fPlaying = false;                  // 导出不走播放逻辑，自己排帧
       hint($('f-status'), '导出中… ' + (canPush ? '逐帧确定性模式' : '自动抓帧模式（该浏览器不支持手动推帧）'), 'ok');

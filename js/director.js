@@ -213,7 +213,8 @@
         s = { type: 'dolly_in', from: [f[0] + ca * dist, height, f[2] + sa * dist], to: [f[0] + ca * dist * 0.42, height * 0.92, f[2] + sa * dist * 0.42], target: f.slice(), fov: 44, fovTo: 36, ease: 'inOutCubic' };
         break;
       case 'track':
-        s = { type: indoor ? 'pan' : 'follow', from: [f[0] - ca * dist, height, f[2] - sa * dist], to: [f[0] + ca * dist, height, f[2] + sa * dist], target: f.slice(), fov: 42, ease: 'inOutQuad' };
+        // dist 显式传给 follow：注视点两侧走弧线时保持原观看距离，别退到 max(4,|to-from|) 把主体拍远了
+        s = { type: indoor ? 'pan' : 'follow', from: [f[0] - ca * dist, height, f[2] - sa * dist], to: [f[0] + ca * dist, height, f[2] + sa * dist], target: f.slice(), dist: dist, fov: 42, ease: 'inOutQuad' };
         break;
       case 'orbit':
         s = { type: 'push_orbit', from: [f[0] + ca * dist, height, f[2] + sa * dist], to: [f[0] + ca * dist * 0.55, height * 1.05, f[2] + sa * dist * 0.55], target: f.slice(), fov: 40, ease: 'inOutCubic', handheld: .6 };

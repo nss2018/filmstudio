@@ -104,10 +104,19 @@
         break;
       }
       case 'follow': {
-        // 跟随：视线跟着 target 走，机身保持相对偏移并缓慢拉近
+        // ⚠️ 侧向跟拍：**不能**让相机从目标一侧平移到另一侧 —— 中点会正好压在注视点上，
+        //    视线方向退化（lookAt 的 z 向量为 0），画面里什么都没有，只剩天空和雾。
+        //    所以沿「垂直于视线的方向」绕目标走弧线，始终保持设定距离。
         var tg = shot.target || [0, 1.2, 0];
-        out.target = [lerp(out.target[0], tg[0], 1), tg[1], tg[2]];
-        out.eye = [lerp(from[0], to[0], e), lerp(from[1], to[1], e), lerp(from[2], to[2], e)];
+        var dirx = to[0] - from[0], dirz = to[2] - from[2];
+        var dl = Math.hypot(dirx, dirz) || 1;
+        var dist = shot.dist === undefined ? Math.max(4, dl) : shot.dist;
+        var ang = (e - 0.5) * 0.6;                          // 左右各 17°，避免转到背面穿帮
+        var base = Math.atan2(to[2] - tg[2], to[0] - tg[0]);
+        var a = base + ang;
+        out.eye = [tg[0] + Math.cos(a) * dist,
+                   lerp(from[1], to[1], e),
+                   tg[2] + Math.sin(a) * dist];
         out.target = tg.slice();
         out.fov = lerp(fov, fovTo, e);
         break;

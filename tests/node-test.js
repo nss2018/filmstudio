@@ -531,6 +531,37 @@ ok('导出快照与当前 film 隔离（快照是深拷贝）', (() => {
   return snap.scenes[0].text === 'b';
 })());
 
+/* ---------- N. 相机安全：视线距离不得退化（3D 画面只剩天空雾的回归） ---------- */
+section('\n7. 相机安全（eye-target 距离）');
+const distOf = (c) => Math.hypot(c.eye[0] - c.target[0], c.eye[1] - c.target[1], c.eye[2] - c.target[2]);
+ok('follow 回归：from/to 分列注视点两侧，中点不再穿过（距离恒 >2m）', (() => {
+  // 复刻段2 bug：相机 y 与注视点同高，直线插值的中点距离恰为 0 → lookAt 方向退化 → 只剩天空和雾
+  const shot = { type: 'follow', from: [-8.5, 1.2, 0], to: [8.5, 1.2, 0], target: [0, 1.2, 0], fov: 42, ease: 'inOutQuad' };
+  let worst = Infinity;
+  for (let k = 0; k <= 100; k++) worst = Math.min(worst, distOf(FS.camera.evalShot(shot, k / 100, k / 10)));
+  return worst > 2 ? true : '最近 ' + worst.toFixed(3) + 'm';
+})());
+ok('全镜头类型 × 全进度扫描（40 种子 × 3/4/5 段）：距离恒 >1m', (() => {
+  const texts = ['咖啡馆 咖啡', '街道 汽车', '公园 散步', '海边 日落', '书房 读书', '实验室 数据', '厨房 做饭', '夜市 小吃'];
+  let worst = Infinity, worstAt = '';
+  for (let seed = 1; seed <= 40; seed++) {
+    for (const n of [3, 4, 5]) {
+      const sb = FS.director.build({
+        title: 't' + seed, seed,
+        scenes: Array.from({ length: n }, (_, i) => ({ title: 's' + i, text: texts[(seed + i) % texts.length] }))
+      });
+      for (const sh of sb.shots) {
+        for (let k = 0; k <= 50; k++) {
+          const p = k / 50;
+          const d = distOf(FS.camera.evalShot(sh.shot, p, p * 4));
+          if (d < worst) { worst = d; worstAt = 'seed=' + seed + ' 段' + sh.index + ' ' + sh.shot.type + ' p=' + p.toFixed(2); }
+        }
+      }
+    }
+  }
+  return worst > 1 ? true : '最近 ' + worst.toFixed(3) + 'm @ ' + worstAt;
+})());
+
 FS.renderScore(FS.parseScore(JSON.stringify(filmMusic.score)), { sampleRate: 22050 }).then(
   () => ok('工厂出的曲子能离线渲染出音频', true),
   (e) => ok('工厂出的曲子能离线渲染出音频', false, e.message.slice(0, 60))

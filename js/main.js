@@ -710,17 +710,15 @@
     // 进度直接打在预览按钮上；失败兜底恢复按钮，不再无声无息。
     buildNarrPlan(film, c, function (m) { $('f-preview').textContent = m; }).then(function (plan) {
       if (fPlaying) return;                        // 合成期间用户又点了停止/重播
-      if (film.music) {
-        if (!fBuf) { hint($('f-status'), '配乐还没生成，先点『只导配乐』或直接开始的按钮', 'bad'); }
-        else {
-          fNode = c.createBufferSource();
-          fNode.buffer = fBuf;
-          fNode.connect(c.destination);
-          fStart = c.currentTime + 0.08;
-          fNode.start(fStart);
-        }
-      } else fStart = c.currentTime + 0.08;
+      if (film.music && fBuf) {                    // 有配乐就放；没有也照常播（纯画面+配音），预览不强制配乐
+        fNode = c.createBufferSource();
+        fNode.buffer = fBuf;
+        fNode.connect(c.destination);
+        fStart = c.currentTime + 0.08;
+        fNode.start(fStart);
+      } else fStart = c.currentTime + 0.08;        // ⚠️ 必须赋值，否则 fT0 沿用上次的旧值，配音会排程到过去全部齐响
       fT0 = fStart;
+      narrStopAll();                               // 双保险：清掉任何残留排程，杜绝重叠语音
       narrStartAt(plan, c, fT0, c.destination);
       fPlaying = true;
       $('f-preview').textContent = '❚❚ 播放中';
@@ -812,6 +810,7 @@
 
   function narrStartAt(plan, c, baseTime, dest1, dest2) {
     plan.forEach(function (p) {
+      if (!isFinite(baseTime + p.at)) return;      // 非法时刻（NaN/undefined）不排程，宁缺毋滥
       var src = c.createBufferSource();
       src.buffer = p.buf;
       src.connect(dest1);
@@ -923,6 +922,7 @@
       var frames = Math.max(1, Math.ceil(total * EXPORT_FPS));
       var t0Wall = c.currentTime + 0.12;
       node.start(t0Wall);
+      narrStopAll();                               // 连续导出两次时清掉上一轮残留
       narrStartAt(plan, c, t0Wall, media, c.destination);   // 人声按时间轴录进流里 + 外放
       rec.start();
       fNode = node; fPlaying = false;                  // 导出不走播放逻辑，自己排帧

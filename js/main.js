@@ -147,6 +147,7 @@
   }
 
   $('mf-go').addEventListener('click', function () { mfApply(FS.factory.generate(mfOpts())); });
+  $('mf-play').addEventListener('click', function () { mPlaying ? musicStop() : musicPlay(); });
   $('mf-again').addEventListener('click', function () { mfApply(FS.factory.generateUnique(mfOpts(), mfUsed)); });
   $('mf-skip').addEventListener('click', function () {
     var ids = ['auto'].concat(FS.factory.STYLES.map(function (s) { return s.id; }));
@@ -283,7 +284,7 @@
   }
 
   function musicPlay() {
-    if (!mBuf) return;
+    if (!mBuf) { setStatus('还没合成出音频，先点「生成配乐」或选个预设', 'bad'); return; }
     try { ctx(); } catch (e) { setStatus('✗ ' + e.message, 'bad'); return; }
     musicStop();
     var c = ctx();
@@ -294,6 +295,8 @@
     mNode.start(mStart);
     mPlaying = true;
     $('btn-play').textContent = '❚❚ 播放中';
+    var mp = $('mf-play');
+    if (mp) mp.textContent = '❚❚ 试听中';
     tickMusic();
   }
 
@@ -301,6 +304,8 @@
     mPlaying = false;
     if (mNode) { try { mNode.stop(); } catch (e) {} mNode = null; }
     $('btn-play').textContent = '▶ 播放';
+    var mp = $('mf-play');
+    if (mp) mp.textContent = '▶ 试听';
     $('play-progress').style.width = '0%';
     try { FS.roll.clearPlayhead(); } catch (e) {}
   }

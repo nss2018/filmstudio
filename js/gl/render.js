@@ -165,34 +165,50 @@
 
     var M4 = GLC.M4;
 
-    /* ---------- 资源缓存：同一地点只烘焙一次 ---------- */
-    var placeCache = {};
+    /* ---------- 资源缓存：同一地点只烘焙一次，但必须有上限 ----------
+     * 借鉴 digiCreature_ios 的 boxCache 有界设计：那里是
+     *   「if boxCache.count > 256 { boxCache.removeAll() }」+ NSLock。
+     * GPU 显存不像内存，泄漏是实打实的：一直换场景会把纹理/缓冲堆满，
+     * 最后整个 WebGL 上下文丢失（Safari 上尤其明显）。淘汰时必须
+     * deleteVertexArray/deleteBuffer，光从 JS 对象里删是释放不了显存的
+     * —— 所以淘汰逻辑抽到 js/gl/lru.js，能在 node 里直接测。
+     */
+    var PLACE_MAX = 6, CAST_MAX = 8;
+
+    function disposeAll(m) {
+      if (!m) return;
+      GLC.disposeMesh(gl, m.solid);
+      GLC.disposeMesh(gl, m.water);
+      GLC.disposeMesh(gl, m.glow);
+      if (m.meshes) m.meshes.forEach(function (x) { GLC.disposeMesh(gl, x); });
+    }
+
+    var placeCache = FS.LRU(PLACE_MAX, function (k, m) { disposeAll(m); });
+    var castCache = FS.LRU(CAST_MAX, function (k, m) { disposeAll(m); });
+
     function placeMesh(placeId, seed) {
       var key = placeId + '#' + seed;
-      if (placeCache[key]) return placeCache[key];
+      var got = placeCache.get(key);
+      if (got) return got;
       // 每个地点用固定种子 → 每次打开同一场景布局一致（可复现），但不同地点各不相同
       var rng = FS.director.mkRng(FS.director.fnv(placeId) ^ 0x9e37);
       var b = FS.world.buildPlace(placeId, rng.f);
-      var m = {
+      return placeCache.set(key, {
         info: b,
         solid: b.solid && b.solid.idx.length ? GLC.upload(gl, b.solid) : null,
         water: b.water && b.water.idx.length ? GLC.upload(gl, b.water) : null,
         glow: b.glow && b.glow.idx.length ? GLC.upload(gl, b.glow) : null
-      };
-      placeCache[key] = m;
-      return m;
+      });
     }
-    var castCache = {};
     function castMesh(castId, seed) {
       var key = castId + '#' + seed;
-      if (castCache[key]) return castCache[key];
+      var got = castCache.get(key);
+      if (got) return got;
       var rng = FS.director.mkRng(FS.director.fnv(castId) ^ 0x85eb);
       var inst = FS.cast.instantiate(castId, rng.f, 'a');
       if (!inst) return null;
       var parts = inst.parts.map(function (p) { return GLC.upload(gl, p.geo); });
-      var c = { inst: inst, meshes: parts };
-      castCache[key] = c;
-      return c;
+      return castCache.set(key, { inst: inst, meshes: parts });
     }
 
     /* ---------- 一帧 ---------- */
@@ -395,15 +411,19 @@
 
       /** 统计信息，给 UI 显示 */
       stats: function () {
-        var keys = Object.keys(placeCache), ckeys = Object.keys(castCache);
+        var ps = placeCache.stats(), cs = castCache.stats();
         var tris = 0;
-        keys.forEach(function (k) {
-          var m = placeCache[k];
+        placeCache.forEach(function (m) {
           if (m.solid) tris += m.solid.tris;
           if (m.water) tris += m.water.tris;
           if (m.glow) tris += m.glow.tris;
         });
-        return { places: keys.length, casts: ckeys.length, tris: tris, bloom: rtScene.ok && rtA.ok };
+        return {
+          places: ps.size, casts: cs.size, tris: tris,
+          bloom: rtScene.ok && rtA.ok,
+          evicted: ps.evictions + cs.evictions, hits: ps.hits + cs.hits,
+          placeMax: ps.limit, castMax: cs.limit
+        };
       },
 
       /** 能力自检，给页面底部的环境自检用 */

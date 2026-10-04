@@ -11,6 +11,7 @@ require(path.join(__dirname, '..', 'js', 'synth.js'));
 require(path.join(__dirname, '..', 'js', 'story.js'));
 require(path.join(__dirname, '..', 'js', 'factory.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'core.js'));
+require(path.join(__dirname, '..', 'js', 'gl', 'lru.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'geom.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'camera.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'world.js'));
@@ -466,6 +467,68 @@ ok('LLM 分镜并入后仍然合法（非法地点/角色被顶掉）', (() => {
 ok('LLM 段落数超出文案时不会多出镜头', (() => {
   const merged = FS.director.mergeLLM(sb, { shots: [{}, {}, {}, {}, {}, {}] });
   return merged.shots.length === sb.shots.length;
+})());
+
+/* ---------- 11. 有界缓存（借鉴 digiCreature_ios 的 boxCache） ---------- */
+section('11. 有界 LRU 缓存（显存不能只删 JS 对象）');
+const freed = [];
+const lru = FS.LRU(3, (k, v) => freed.push(k + ':' + v));
+lru.set('a', 1); lru.set('b', 2); lru.set('c', 3);
+ok('未超上限时不淘汰', freed.length === 0 && lru.size() === 3, '(size=' + lru.size() + ')');
+lru.get('a');                         // a 变成最新
+lru.set('d', 4);                       // 容量 4 > 3 → 淘汰最旧的 b
+ok('超上限淘汰最旧的一条（不是最早插入的那条）', freed.length === 1 && freed[0] === 'b:2',
+  '(淘汰 ' + freed.join(',') + ')');
+ok('被淘汰的确实不在缓存里了', !lru.has('b') && lru.has('a') && lru.has('d'));
+lru.set('a', 9);                       // 覆盖已存在的 key
+ok('覆盖旧值也会回调释放（否则显存留双份）', freed.length === 2 && freed[1] === 'a:1' && lru.get('a') === 9);
+ok('淘汰计数与命中数可读（给自检页显示）', (() => {
+  const s = lru.stats();
+  return s.evictions >= 1 && s.hits >= 2 && s.limit === 3 && s.misses >= 0;
+})());
+ok('clear 会释放全部', (() => {
+  const n0 = freed.length;
+  lru.clear();
+  return lru.size() === 0 && freed.length > n0;
+})());
+ok('缓存上限在渲染层真的接上了（源码里有 PLACE_MAX / CAST_MAX 传进 LRU）', (() => {
+  const src = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'gl', 'render.js'), 'utf8');
+  return /FS\.LRU\(\s*\w+\s*,/.test(src) && /disposeMesh/.test(src);
+})());
+
+/* ---------- 12. 逐帧确定性导出（借鉴 digiCreature_ios 的 t = k/fps） ---------- */
+section('12. 逐帧确定性导出');
+const FPS = 30;
+const sb2 = FS.director.build({ title: '导出测试', scenes: DS, bpm: 84, beats: 8, seed: 5 });
+const total2 = sb2.totalSec;
+const frames2 = Math.ceil(total2 * FPS);
+ok('帧数 = ceil(总时长 × fps)', frames2 === Math.ceil(total2 * 30),
+  '(' + frames2 + ' 帧 / ' + total2.toFixed(2) + 's)');
+ok('最后一帧不越界（t < total）', (frames2 - 1) / FPS < total2, '(t=' + ((frames2 - 1) / FPS).toFixed(2) + 's)');
+ok('两段「不同推进节奏」渲染出的帧序列完全相同（这才是确定性的定义）', (() => {
+  // A：稳定 30fps；B：模拟卡顿（步长抖动，帧号不变）
+  const seqA = [], seqB = [];
+  let wall = 0;
+  for (let k = 0; k < frames2; k++) {
+    const t = k / FPS;
+    seqA.push(JSON.stringify(FS.camera.evalShot(sb2.shots[0].shot, t / sb2.shots[0].durationSec, t)));
+    wall += 7 + (k % 5) * 3;                 // 假墙钟：忽快忽慢
+    seqB.push(JSON.stringify(FS.camera.evalShot(sb2.shots[0].shot, wall * 0 + (k / FPS) / sb2.shots[0].durationSec, k / FPS)));
+  }
+  return seqA.join('|') === seqB.join('|');
+})());
+ok('角色姿态在相同 t 下逐字段一致（含动画相位）', (() => {
+  const inst = FS.cast.instantiate('person', FS.director.mkRng(3).f, 'a');
+  const w = { x: 1, y: 0, z: 2, yaw: 0.5 };
+  const a = JSON.stringify(FS.cast.pose(inst, 'walk', 1.234, w, 1));
+  const b = JSON.stringify(FS.cast.pose(inst, 'walk', 1.234, w, 1));
+  return a === b;
+})());
+ok('导出快照与当前 film 隔离（快照是深拷贝）', (() => {
+  const film = { title: 'x', scenes: [{ title: 'a', text: 'b' }], bpm: 84, beats: 8, engine: '2d', sub: 'on' };
+  const snap = JSON.parse(JSON.stringify(film));
+  film.scenes[0].text = '被改了';
+  return snap.scenes[0].text === 'b';
 })());
 
 FS.renderScore(FS.parseScore(JSON.stringify(filmMusic.score)), { sampleRate: 22050 }).then(

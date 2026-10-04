@@ -465,14 +465,26 @@
   }
 
   /** 重画一帧到 stage（t 由调用方给） */
-  function paint(t) {
+  /** 画第 t 秒那一帧。st 缺省用当前 film；导出时传「参数快照」，
+   *  这样用户在导出过程中改界面也不会让成片串帧（借鉴 digiCreature_ios 的导出前快照）。 */
+  function paint(t, st) {
+    st = st || film;
     var cv = $('stage');
     var g = cv.getContext('2d');
     g.clearRect(0, 0, cv.width, cv.height);
     // 3D 模式：GL 渲染完由 render3d 自己 drawImage 回 stage 并叠字幕，
     // 所以导出（captureStream(stage)）那条链路一行都不用改。
-    if (film.engine === '3d' && gl3d && gl3d.storyboard) { gl3d.draw(t); return; }
-    FS.story.drawFrame(g, film, t);
+    if (st.engine === '3d' && gl3d && gl3d.storyboard) { gl3d.draw(t); return; }
+    FS.story.drawFrame(g, st, t);
+  }
+
+  /** 导出前的状态快照：只挑渲染真正会读的字段 */
+  function filmSnapshot() {
+    return {
+      title: film.title, template: film.template, palette: film.palette,
+      engine: film.engine, bpm: film.bpm, beats: film.beats, sub: film.sub,
+      scenes: film.scenes.map(function (s) { return { title: s.title, text: s.text }; })
+    };
   }
 
   function redraw() {
@@ -600,7 +612,9 @@
     var st = gl3d.stats();
     hint(el, '第 ' + (i.shotIndex + 1) + ' 段 · ' + i.placeName + ' · 镜头 ' + i.shotType +
       ' · ' + i.mood + ' · 出场 ' + (i.cast.join('、') || '（无角色）') +
-      ' · 三角面 ' + st.tris + ' · 场景缓存 ' + st.places + ' · ' + (st.bloom ? '辉光开' : '辉光关'), 'ok');
+      ' · 三角面 ' + st.tris + ' · 缓存 ' + st.places + '/' + st.placeMax + ' 场景' +
+      (st.evicted ? ' · 已淘汰 ' + st.evicted : '') +
+      ' · ' + (st.bloom ? '辉光开' : '辉光关'), 'ok');
   }
 
   $('f-engine').addEventListener('change', function () { setEngine(this.value); });
@@ -711,6 +725,16 @@
     return '';
   }
 
+  /* ---------------- 视频导出：逐帧确定性 ----------------
+   * 借鉴 digiCreature_ios 的做法（VideoExporter 用 t = k/fps，姿态只由帧号决定，不读系统时间）：
+   * 原来是 rAF 循环 + `t = c.currentTime - t0`（墙钟驱动），掉帧/卡顿会让画面时间轴跳变，
+   * 同一份片子两次导出会不一样。现在改成：
+   *   画面：captureStream(0) + track.requestFrame() 手动推帧，t = k / FPS 严格递增
+   *   墙钟：只用来「什么时候推下一帧」，不参与画面内容计算
+   *   音频：仍实时播放（要听见），推帧速度被限到不超过实时 → 音画不会错位
+   * 浏览器不支持 requestFrame 时回落成「自动抓帧 + 同样的 t=k/fps」，确定性弱一档但不会黑屏。
+   */
+  var EXPORT_FPS = 30;
   $('f-render').addEventListener('click', function () {
     var mime = pickMime();
     var cv = $('stage');
@@ -722,21 +746,26 @@
 
     var btn = this;
     btn.disabled = true;
-    var tl = FS.story.timeline(film);
+    var snap = filmSnapshot();                       // 快照：导出期间改界面不影响成片
+    var sbSnap = film.sb;
+    var tl = FS.story.timeline(snap);
     var c = ctx();
-    var stream = cv.captureStream(30);
-    var media = null;
-    var node = null;
+
+    // 能不能手动推帧？决定导出走「完全确定性」还是「弱确定性」
+    var probeStream = cv.captureStream(0);
+    var canPush = !!(probeStream.getVideoTracks()[0] && probeStream.getVideoTracks()[0].requestFrame);
+    var stream = canPush ? probeStream : cv.captureStream(EXPORT_FPS);
+    var track = stream.getVideoTracks()[0];
 
     filmRenderAudio().then(function (buf) {
-      media = c.createMediaStreamDestination();
-      node = c.createBufferSource();
+      if (snap.engine === '3d' && gl3d && sbSnap) gl3d.setStoryboard(sbSnap);
+      var media = c.createMediaStreamDestination();
+      var node = c.createBufferSource();
       node.buffer = buf;
       node.connect(media);
       node.connect(c.destination);      // 同步外放，不然录的时候听不见
-      var rec = new MediaRecorder(new MediaStream([
-        stream.getVideoTracks()[0], media.stream.getAudioTracks()[0]
-      ]), mime ? { mimeType: mime, videoBitsPerSecond: 6000000 } : undefined);
+      var rec = new MediaRecorder(new MediaStream([track, media.stream.getAudioTracks()[0]]),
+        mime ? { mimeType: mime, videoBitsPerSecond: 6000000 } : undefined);
 
       var chunks = [];
       rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
@@ -744,31 +773,49 @@
         filmStop();
         btn.disabled = false;
         var blob = new Blob(chunks, { type: mime || 'video/webm' });
-        FS.download(blob, (film.title || 'film') + (mime.indexOf('mp4') >= 0 ? '.mp4' : '.webm'));
-        hint($('f-status'), '✓ 导出完成（' + (blob.size / 1048576).toFixed(1) + ' MB）', 'ok');
+        FS.download(blob, (snap.title || 'film') + (mime.indexOf('mp4') >= 0 ? '.mp4' : '.webm'));
+        hint($('f-status'), '✓ 导出完成（' + frames + ' 帧 @' + EXPORT_FPS + 'fps，' +
+          (blob.size / 1048576).toFixed(1) + ' MB' + (canPush ? '，逐帧确定性' : '，自动抓帧模式') + '）', 'ok');
+        if (gl3d) gl3d.setStoryboard(film.sb);        // 恢复预览用的分镜
       };
 
-      var t0 = c.currentTime + 0.12;
-      node.start(t0);
+      var total = tl.total;
+      var frames = Math.max(1, Math.ceil(total * EXPORT_FPS));
+      var t0Wall = c.currentTime + 0.12;
+      node.start(t0Wall);
       rec.start();
-      fNode = node; fPlaying = true; fT0 = t0;
+      fNode = node; fPlaying = false;                  // 导出不走播放逻辑，自己排帧
+      hint($('f-status'), '导出中… ' + (canPush ? '逐帧确定性模式' : '自动抓帧模式（该浏览器不支持手动推帧）'), 'ok');
 
       var bar = $('f-progress');
-      (function loop() {
-        if (!fPlaying) return;
-        var t = c.currentTime - t0;
-        bar.style.width = Math.min(100, t / tl.total * 100) + '%';
-        $('f-clock').textContent = Math.max(0, t).toFixed(2) + 's';
-        paint(Math.max(0, t));
-        markDots(Math.max(0, t));
-        if (t > tl.total) {
-          bar.style.width = '100%';
-          setTimeout(function () { try { rec.stop(); node.stop(); node.disconnect(); } catch (e) {} }, 120);
-          fPlaying = false;
-          return;
-        }
-        fRAF = root.requestAnimationFrame(loop);
-      })();
+      var wall0 = (root.performance && performance.now) ? performance.now() : Date.now();
+      var now = function () { return ((root.performance && performance.now) ? performance.now() : Date.now()) - wall0; };
+      var k = 0;
+
+      function finish() {
+        bar.style.width = '100%';
+        $('f-clock').textContent = total.toFixed(2) + 's';
+        // 音频是实时的：画面推完了音频可能还在放，等它播完再收尾（音画才对得上）
+        var remain = (t0Wall + total + 0.25) - c.currentTime;
+        setTimeout(function () {
+          try { rec.stop(); node.stop(); node.disconnect(); } catch (e) {}
+        }, Math.max(150, remain * 1000));
+      }
+
+      function step() {
+        if (k >= frames) { finish(); return; }
+        var t = k / EXPORT_FPS;                        // ★ 时间只由帧号决定
+        paint(t, snap);
+        markDots(t);
+        if (canPush) track.requestFrame();
+        k++;
+        $('f-clock').textContent = t.toFixed(2) + 's';
+        bar.style.width = Math.min(100, k / frames * 100) + '%';
+        // 限速：不比实时快，否则音频先放完、画面还在推 → 音画错位
+        var due = k * (1000 / EXPORT_FPS);
+        setTimeout(step, Math.max(0, due - now()));
+      }
+      setTimeout(step, 0);
     })['catch'](function (e) {
       btn.disabled = false;
       hint($('f-status'), '✗ ' + e.message, 'bad');

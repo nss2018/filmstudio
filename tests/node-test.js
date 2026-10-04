@@ -9,6 +9,7 @@ require(path.join(__dirname, '..', 'js', 'score.js'));
 require(path.join(__dirname, '..', 'js', 'wav.js'));
 require(path.join(__dirname, '..', 'js', 'synth.js'));
 require(path.join(__dirname, '..', 'js', 'story.js'));
+require(path.join(__dirname, '..', 'js', 'factory.js'));
 const FS = global.FS;
 
 let pass = 0, fail = 0;
@@ -153,6 +154,91 @@ FS.renderScore(FS.story.buildScore(film), { sampleRate: 8000 }).then(
 const fscParsed = FS.parseScore(JSON.stringify(fsc));   // main.js 走的就是这条链路
 ok('buildScore -> parseScore 后音符都带上 t',
   fscParsed.tracks.every((t) => t.notes.every((n) => typeof n.t === 'number' && isFinite(n.t))));
+
+/* ---------- 5. 音乐工厂 ---------- */
+section('5. 音乐工厂（采集 + 变形 + 不重复）');
+const KEY_PC = [0, 2, 4, 5, 7, 9, 11];
+
+/** 独立复算：按 meta 的调式推出允许的 pitch class 集合（不复用工厂内部实现，才算数） */
+function scalePCs(meta) {
+  const steps = Object.keys(FS.factory.SCALES).filter((k) => FS.factory.SCALES[k].name === meta.scale)[0];
+  const st = FS.factory.SCALES[steps].steps;
+  const rootPc = KEY_PC['CDEFGAB'.indexOf(meta.key)];
+  return st.map((s) => (s + rootPc) % 12);
+}
+
+const g1 = FS.factory.generate({ theme: '群论', seed: 2024, bars: 12 });
+const g2 = FS.factory.generate({ theme: '群论', seed: 2024, bars: 12 });
+ok('同主题同种子完全可复现（逐字节）',
+  FS.factory.toText(g1.score) === FS.factory.toText(g2.score));
+ok('产物是标准 cues.json 且能被解析', (() => {
+  const p = FS.parseScore(FS.factory.toText(g1.score));
+  return p.tracks.length === g1.score.tracks.length && p.duration > 0;
+})());
+ok('有 lead / bass / pad 轨', ['lead', 'bass', 'pad'].every((n) => g1.score.tracks.some((t) => t.name === n)));
+ok('鼓轨音符没有音高（走打击乐分支）',
+  g1.score.tracks.filter((t) => ['kick', 'snare', 'hat'].includes(t.instrument))
+    .every((t) => t.notes.every((n) => n.p === undefined)));
+
+// ⚠️ 回归测试：曾经给"小调三度"减半音，把 i 和弦的 C-Eb 变成 C-D（大二度）= 跑调
+const offScale = [];
+['群论', '量子力学', '热血少年', '月亮与海', '赛博朋克城市', '咖啡猫'].forEach((theme, i) => {
+  const r = FS.factory.generate({ theme, seed: 700 + i, bars: 12 });
+  const pcs = scalePCs(r.meta);
+  r.score.tracks.filter((t) => t.instrument !== 'kick' && t.instrument !== 'snare' && t.instrument !== 'hat')
+    .forEach((t) => t.notes.forEach((n) => {
+      const pc = ((FS.pitchToMidi(n.p) % 12) + 12) % 12;
+      if (!pcs.includes(pc)) offScale.push(theme + '/' + t.name + '/' + n.p);
+    }));
+});
+ok('所有旋律/低音/铺底音都在当前调式内（6 首 × 全音符）', offScale.length === 0,
+  offScale.length ? offScale.slice(0, 5).join(' ') : '');
+
+// ⚠️ 回归测试：变形算子曾经因为 usedOps[o.id] < 3（undefined 比较恒 false）一次都没生效
+ok('变形算子真的生效了（不是原动机直用）', g1.meta.ops.length >= 1, '(' + g1.meta.ops.join('、') + ')');
+ok('素材来源写清了采了什么', g1.meta.sources.length >= 5 && g1.meta.sources.every((s) => s.label && s.label.length),
+  g1.meta.sources.map((s) => s.type).join('/'));
+ok('12 小节至少 4 个乐句变体', g1.meta.variants >= 4, '(' + g1.meta.variants + ' 个)');
+
+const seedRuns = {};
+for (let i = 0; i < 30; i++) seedRuns[FS.factory.generate({ theme: '随机', seed: i }).meta.fingerprint] = 1;
+ok('同主题换 30 个种子 = 30 首不同的曲子', Object.keys(seedRuns).length === 30, '(' + Object.keys(seedRuns).length + '/30)');
+
+const themeRuns = {};
+['群论', '量子', '热血', '月亮', '咖啡猫', '历史', 'AI', '森林', '游戏', '赛博'].forEach((t, i) => {
+  themeRuns[t] = FS.factory.generate({ theme: t, seed: 1 }).meta.fingerprint;
+});
+ok('10 个主题给出 10 首不同的曲子', new Set(Object.values(themeRuns)).size === 10);
+
+const used = {};
+let clash = 0;
+for (let i = 0; i < 12; i++) {
+  const r = FS.factory.generateUnique({ theme: '群论', seed: 300 + i }, used);
+  if (used[r.meta.fingerprint]) clash++;
+  used[r.meta.fingerprint] = 1;
+}
+ok('「保证不重复」连出 12 首，零冲突', clash === 0 && Object.keys(used).length === 12, '(clash=' + clash + ')');
+
+ok('同一主题映射到同一风格（可复现），不同主题可区分', (() => {
+  const a = FS.factory.styleFor('热血少年').id;
+  const b = FS.factory.styleFor('热血少年').id;
+  const c = FS.factory.styleFor('群论').id;
+  return a === b && a !== c;
+})(), '(热血少年→' + FS.factory.styleFor('热血少年').name + '，群论→' + FS.factory.styleFor('群论').name + ')');
+
+const filmMusic = FS.factory.forFilm({ title: '群论：结构之美', bpm: 84, beats: 8, scenes: [1, 2, 3, 4] });
+ok('宣传片配乐：按片名生成，长度跟画幅走', filmMusic.meta.bars === 8 && filmMusic.meta.bpm === 84,
+  '(' + filmMusic.meta.bars + ' 小节 / ' + filmMusic.meta.bpm + ' BPM)');
+ok('宣传片配乐能覆盖画面总长', filmMusic.score.duration >= 4 * 8 * 60 / 84,
+  '(' + filmMusic.score.duration.toFixed(1) + 's vs ' + (4 * 8 * 60 / 84).toFixed(1) + 's)');
+const factoryParsed = FS.parseScore(FS.factory.toText(filmMusic.score));
+ok('工厂产物 -> parseScore 后音符都带上 t',
+  factoryParsed.tracks.every((t) => t.notes.every((n) => typeof n.t === 'number' && isFinite(n.t))));
+
+FS.renderScore(FS.parseScore(JSON.stringify(filmMusic.score)), { sampleRate: 22050 }).then(
+  () => ok('工厂出的曲子能离线渲染出音频', true),
+  (e) => ok('工厂出的曲子能离线渲染出音频', false, e.message.slice(0, 60))
+);
 
 FS.renderScore(fscParsed, { sampleRate: 22050 }).then((buf) => {
   ok('渲染回调拿到 AudioBuffer', !!buf && typeof buf.getChannelData === 'function');

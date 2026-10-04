@@ -68,6 +68,26 @@
     return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
   }
 
+  /** 字幕：开了 sub 才画，超长自动缩字号（最多两行），返回占了几行 */
+  function sub(g, story, sc, cx, y, maxW, basePx, weight) {
+    if (story.sub === 'off' || !sc.text) return 0;
+    var c = pal(story.palette);
+    var px = basePx, w = weight || 400, lines;
+    g.font = font(px, w);
+    lines = wrapText(g, sc.text, maxW);
+    var guard = 0;
+    while (lines.length > 2 && px > 15 && guard++ < 14) {
+      px -= 2;
+      g.font = font(px, w);
+      lines = wrapText(g, sc.text, maxW);
+    }
+    g.fillStyle = c.text;
+    var lh = px * 1.5;
+    var y0 = y - (lines.length - 1) * lh / 2;
+    for (var i = 0; i < lines.length; i++) g.fillText(lines[i], cx, y0 + i * lh);
+    return lines.length;
+  }
+
   function wrapText(g, text, maxW) {
     var lines = [], cur = '';
     for (var i = 0; i < text.length; i++) {
@@ -113,13 +133,8 @@
     g.shadowBlur = 0;
 
     if (sc.text) {
-      g.font = font(30, 400);
-      g.fillStyle = c.text;
-      g.globalAlpha = alpha * fade;
-      var lines = wrapText(g, sc.text, W - 260);
-      for (var i = 0; i < lines.length; i++) {
-        g.fillText(lines[i], cx, cy + 76 + i * 46);
-      }
+      g.globalAlpha = alpha * fade;      // sub() 只管字和位置，透明度留给调用方
+      sub(g, story, sc, cx, cy + 92, W - 260, 30, 400);
     }
 
     // 段落序号
@@ -173,10 +188,7 @@
 
     if (note) {
       g.globalAlpha = alpha * smooth((p - .35) * 4);
-      g.font = font(28, 400);
-      g.fillStyle = c.text;
-      var lines = wrapText(g, note, W - 300);
-      for (var j = 0; j < lines.length; j++) g.fillText(lines[j], cx, cy + 110 + j * 42);
+      sub(g, story, sc, cx, cy + 118, W - 300, 28, 400);
     }
     g.restore();
   }
@@ -229,10 +241,8 @@
     g.font = font(56, 700);
     g.fillText(story.title || '', W / 2, 150);
     if (sc.text) {
-      g.fillStyle = c.text;
-      g.font = font(26, 400);
       g.globalAlpha = alpha * smooth((p - .2) * 4);
-      g.fillText(sc.text, W / 2, 208);
+      sub(g, story, sc, W / 2, 230, W - 200, 26, 400);
     }
     g.restore();
   }
@@ -269,9 +279,7 @@
     g.fillText((sc.title || ''), W / 2, 110);
 
     g.globalAlpha = alpha * smooth((p - .3) * 3.5);
-    g.font = font(26, 400);
-    var lines = wrapText(g, note, W - 260);
-    for (var i = 0; i < lines.length; i++) g.fillText(lines[i], W / 2, H - 92 + i * 38);
+    sub(g, story, sc, W / 2, H - 108, W - 300, 26, 400);
     g.restore();
   }
 
@@ -315,9 +323,7 @@
     g.font = font(52, 700);
     g.fillText(sc.title || '', cx, cy - R - 70);
     g.fillStyle = c.dim;
-    g.font = font(24, 400);
-    var label = wrapText(g, sc.text || '', W - 400);
-    for (var j = 0; j < label.length; j++) g.fillText(label[j], cx, cy + R + 60 + j * 36);
+    sub(g, story, sc, cx, cy + R + 62, W - 420, 24, 400);
     g.restore();
   }
 

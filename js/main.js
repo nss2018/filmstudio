@@ -66,6 +66,8 @@
     var info = FS.scoreInfo(mScore);
     $('score-meta').textContent = info.summary;
     setStatus('✓ ' + mScore.tracks.length + ' 轨 / ' + info.notes + ' 音 / ' + mScore.duration.toFixed(2) + 's', 'ok');
+    // 任何来源（预设 / 源码 / 图形）的谱都让卷帘重画一遍，图形永远跟音频一致
+    try { FS.roll.load(mScore); } catch (e) {}
     return mScore;
   }
 
@@ -76,6 +78,160 @@
       var sc = parseMusic();
       if (sc) renderMusic(sc);
     }, 450);
+  });
+
+  /* ================== 音乐工厂接线 ================== */
+  // 出过的曲子指纹都记着：点「再来一首」时用它避开刚出的那几首
+  var mfUsed = {}, mfLast = null;
+
+  (function fillStyles() {
+    var sel = $('mf-style');
+    FS.factory.STYLES.forEach(function (s) {
+      var o = document.createElement('option');
+      o.value = s.id;
+      o.textContent = s.name + ' · ' + s.desc;
+      sel.appendChild(o);
+    });
+  })();
+
+  function mfOpts(over) {
+    var o = {
+      theme: $('mf-theme').value.trim() || '未命名',
+      style: $('mf-style').value,
+      bars: parseInt($('mf-bars').value, 10) || 12,
+      density: parseFloat($('mf-dens').value),
+      drums: $('mf-drums').checked
+    };
+    var b = parseFloat($('mf-bpm').value);
+    if (isFinite(b) && b > 20) o.bpm = b;          // 留空 = 交给风格自己定
+    if (over) { for (var k in over) o[k] = over[k]; }
+    return o;
+  }
+
+  /** 把「采了什么 + 怎么改的」写出来 —— 随机生成最怕看不懂在干嘛 */
+  function mfShow(meta) {
+    var rec = $('mf-rec');
+    rec.innerHTML = '';
+    var head = document.createElement('div');
+    head.className = 'mf-head';
+    head.textContent = meta.style.name + ' · ' + meta.key + ' ' + meta.scale + ' · ' +
+      meta.bpm + ' BPM · ' + meta.bars + ' 小节 · ' + meta.notes + ' 个音 · ' + meta.seconds.toFixed(1) + 's';
+    rec.appendChild(head);
+    var grid = document.createElement('div');
+    grid.className = 'mf-grid';
+    meta.sources.forEach(function (s) {
+      var d = document.createElement('span');
+      d.className = 'mf-chip';
+      d.innerHTML = '<b>' + s.type + '</b>' + s.label;
+      grid.appendChild(d);
+    });
+    rec.appendChild(grid);
+    var ops = document.createElement('div');
+    ops.className = 'mf-ops';
+    ops.innerHTML = '变形：<b>' + (meta.ops.join('、') || '（原动机直用）') + '</b>' +
+      ' · 曲式 ' + meta.structure + ' · 乐句变体 ' + meta.variants + ' 个（已查重）' +
+      ' · 指纹 <code>' + meta.fingerprint + '</code>';
+    rec.appendChild(ops);
+    $('mf-status').textContent = '✓ ' + meta.style.name + ' / ' + meta.bpm + ' BPM';
+  }
+
+  /** 生成 -> 写进源码框 -> 走 parseScore -> 渲染 + 灌进卷帘（和手改的谱共用同一条链路） */
+  function mfApply(res) {
+    mfLast = res;
+    mfUsed[res.meta.fingerprint] = 1;
+    $('score-input').value = FS.factory.toText(res.score);
+    var sc = parseMusic();
+    if (sc) renderMusic(sc);
+    mfShow(res.meta);
+    return res;
+  }
+
+  $('mf-go').addEventListener('click', function () { mfApply(FS.factory.generate(mfOpts())); });
+  $('mf-again').addEventListener('click', function () { mfApply(FS.factory.generateUnique(mfOpts(), mfUsed)); });
+  $('mf-skip').addEventListener('click', function () {
+    var ids = ['auto'].concat(FS.factory.STYLES.map(function (s) { return s.id; }));
+    var sel = $('mf-style');
+    sel.value = ids[(ids.indexOf(sel.value) + 1) % ids.length];
+    mfApply(FS.factory.generateUnique(mfOpts(), mfUsed));
+  });
+  $('mf-dens').addEventListener('input', function () { $('mf-dens-val').textContent = (+this.value).toFixed(2); });
+  $('mf-theme').addEventListener('change', function () {
+    var rec = FS.factory.recommend($('mf-theme').value.trim() || '未命名');
+    $('mf-status').textContent = '建议：' + rec.styleName + ' / ' + rec.key + ' 调 / 约 ' + rec.bpm + ' BPM';
+  });
+  $('mf-tofilm').addEventListener('click', function () {
+    if (!mfLast) { $('mf-status').textContent = '先生成一首，再拿去配片'; return; }
+    film.custom = { score: mfLast.score, meta: mfLast.meta };
+    $('f-bpm').value = mfLast.meta.bpm;
+    readFilm();
+    redraw();
+    switchTab('film');
+    hint($('f-musicsrc'), '配乐来源：音乐工厂挑的「' + mfLast.meta.style.name + '」· 指纹 ' + mfLast.meta.fingerprint, 'ok');
+  });
+
+  /* ================== 图形卷帘接线 ================== */
+  // 图形编辑器只产出 JSON 文本，剩下还是走 parseScore -> renderScore，不另开一套渲染
+  FS.roll.mount({
+    canvas: $('roll'),
+    trackBox: $('roll-tracks'),
+    opsBox: $('roll-ops'),
+    barBox: $('roll-bar'),
+    onChange: function (text) {
+      $('score-input').value = text;          // 切到源码页就能看到同一个谱
+      var sc = parseMusic();
+      if (sc) renderMusic(sc);
+    },
+    onError: function (e) { setStatus('✗ ' + e.message, 'bad'); },
+    onPlayTrack: playTrack,
+    onStopTrack: musicStop
+  });
+
+  /** 单独试听一条轨（把这条轨包成一个单轨乐谱，走常规渲染） */
+  function playTrack(t) {
+    try { ctx(); } catch (e) { setStatus('✗ ' + e.message, 'bad'); return; }
+    if (!t.notes.length) { setStatus('这条轨是空的，先点几下', 'bad'); return; }
+    var s = FS.roll.state();
+    var b = 60 / (s.bpm || 84);
+    var last = 0;
+    t.notes.forEach(function (n) { last = Math.max(last, (n.beat + n.dur) * b + 0.25); });
+    var raw = {
+      bpm: s.bpm, sample_rate: 44100, master: 0.85,
+      duration: Math.min(last, s.cols * b),
+      tracks: [{
+        name: t.name, instrument: t.instrument, loop: t.loop,
+        notes: t.notes.map(function (n) {
+          return n.midi === null
+            ? { beat: n.beat, d: n.dur * b }
+            : { p: FS.midi2name(n.midi), beat: n.beat, d: n.dur * b };
+        })
+      }]
+    };
+    var sc;
+    try { sc = FS.parseScore(JSON.stringify(raw)); }
+    catch (e) { setStatus('✗ ' + e.message, 'bad'); return; }
+    FS.renderScore(sc, { sampleRate: 44100 }).then(function (buf) {
+      musicStop();
+      var node = ctx().createBufferSource();
+      node.buffer = buf;
+      node.connect(ctx().destination);
+      node.start(ctx().currentTime + 0.04);
+      setStatus('▶ 正在试听「' + t.name + '」', 'ok');
+      root.setTimeout(function () {
+        setStatus('✓ 合成完成 · ' + buf.duration.toFixed(2) + 's', 'ok');
+      }, buf.duration * 1000);
+    })['catch'](function (e) { setStatus('✗ ' + e.message, 'bad'); });
+  }
+
+  /* 图形 / 源码 切换 */
+  Array.prototype.forEach.call(document.querySelectorAll('#edimode .seg-btn'), function (b) {
+    b.addEventListener('click', function () {
+      Array.prototype.forEach.call(document.querySelectorAll('#edimode .seg-btn'), function (x) {
+        x.classList.toggle('active', x === b);
+      });
+      $('ed-roll').hidden = (b.dataset.mode !== 'roll');
+      $('ed-json').hidden = (b.dataset.mode !== 'json');
+      if (b.dataset.mode === 'roll') FS.roll.draw();
+    });
   });
 
   function renderMusic(sc) {
@@ -146,6 +302,7 @@
     if (mNode) { try { mNode.stop(); } catch (e) {} mNode = null; }
     $('btn-play').textContent = '▶ 播放';
     $('play-progress').style.width = '0%';
+    try { FS.roll.clearPlayhead(); } catch (e) {}
   }
 
   function tickMusic() {
@@ -155,6 +312,7 @@
     if (t < 0) t = 0;
     var dur = mBuf ? mBuf.duration : 1;
     $('play-progress').style.width = Math.min(100, t / dur * 100) + '%';
+    try { FS.roll.setPlayhead(t); } catch (e) {}
     if (t > dur) { musicStop(); return; }
     root.requestAnimationFrame(tickMusic);
   }
@@ -192,7 +350,8 @@
   /* ================== 宣传片生成器 ================== */
   var film = {
     title: '群论：结构之美', template: 'concept', palette: 'ink',
-    bpm: 84, beats: 8, scenes: [], music: true, sub: 'on'
+    bpm: 84, beats: 8, scenes: [], music: true, sub: 'on',
+    custom: null          // 手动挑的配乐（音乐工厂出的曲子）；null = 按片名自动生成
   };
   var fBuf = null, fPlaying = false, fStart = 0, fNode = null, fT0 = 0, fRAF = null;
 
@@ -203,6 +362,7 @@
     film.bpm = parseInt($('f-bpm').value, 10) || 84;
     film.beats = parseInt($('f-beats').value, 10) || 8;
     film.music = $('f-music').checked;
+    film.sub = $('f-sub').value;      // 关掉后母题函数里就不画字幕
     film.scenes = [];
     Array.prototype.forEach.call(document.querySelectorAll('#f-scenes .scene'), function (el) {
       var ins = el.querySelectorAll('input');
@@ -378,13 +538,26 @@
   });
   $('f-music').addEventListener('change', function () { readFilm(); });
 
-  // ⚠️ buildScore 吐的是 {p, beat} 形式（没 t），必须先过 parseScore 归一化，
-  // 否则音符时间是 undefined，一路 NaN 变成整段静音，还查不出毛病。
+  // ⚠️ 两条链路都得先过 parseScore：工厂/故事吐的都是 {p, beat} 形式（没 t），
+  // 直接送渲染器 = 音符时间 undefined，一路 NaN 变整段静音，还查不出毛病。
+  function filmCues() {
+    if (film.custom) return film.custom.score;      // 手工挑的那首
+    return FS.factory.forFilm(film).score;         // 按片名当主题：同片名可复现，不同片名必不同
+  }
   function filmRenderAudio() {
-    var raw = FS.story.buildScore(film);
-    var sc = FS.parseScore(JSON.stringify(raw));   // 顺带校验，坏谱会给人话错误
+    var sc = FS.parseScore(JSON.stringify(filmCues()));   // 顺带校验，坏谱会给人话错误
     return FS.renderScore(sc, { sampleRate: 44100 });
   }
+
+  $('f-newmusic').addEventListener('click', function () {
+    readFilm();
+    var bars = Math.max(2, Math.min(48, Math.round(film.scenes.length * film.beats / 4)));
+    var res = FS.factory.generateUnique({ theme: film.title, bpm: film.bpm, bars: bars }, mfUsed);
+    film.custom = { score: res.score, meta: res.meta };
+    mfApply(res);                                   // 顺便让配乐台也能看/改这一首
+    hint($('f-musicsrc'), '配乐来源：按片名「' + film.title + '」现生成 · ' +
+      res.meta.style.name + ' / ' + res.meta.bpm + ' BPM / 指纹 ' + res.meta.fingerprint, 'ok');
+  });
 
   $('f-audio').addEventListener('click', function () {
     try { ctx(); } catch (e) { hint($('f-status'), '✗ ' + e.message, 'bad'); return; }
@@ -495,6 +668,87 @@
       (film.title || 'project') + '.json');
     hint($('f-status'), '✓ 项目已备份（含配乐谱，可复原到配乐台重调）', 'ok');
   });
+
+  /* ================== 文案助手（字幕从哪来） ================== */
+  var cfg = FS.script.loadCfg() || {};
+
+  function scriptOpts() {
+    return {
+      topic: $('sw-topic').value,
+      example: $('sw-example').value,
+      mood: $('sw-mood').value,
+      count: $('sw-count').value,
+      bpm: parseInt($('f-bpm').value, 10) || 84
+    };
+  }
+
+  /** 把文案灌进生成器：重建段落 DOM、顺带把每段拍数调到读得完 */
+  function applyScript(out) {
+    var box = $('f-scenes');
+    box.innerHTML = '';
+    (out.scenes || []).forEach(function (s) { addScene({ title: s.title, text: s.text }); });
+    $('f-title').value = out.title || '未命名';
+    if (out.advice && out.advice.beats) $('f-beats').value = out.advice.beats;
+    readFilm();
+    redraw();
+    var adv = out.advice || FS.script.advice(out.scenes, parseInt($('f-bpm').value, 10));
+    hint($('sw-out'), '已填入 ' + out.scenes.length + ' 段。最长一段 ' + adv.longest +
+      ' 字' + (adv.ok ? '，这个字数读得过来。' : '，偏长了，观众来不及看——建议拆短或加拍数：') +
+      ' 每段建议 ' + adv.beats + ' 拍（' + (adv.beats * 60 / (parseInt($('f-bpm').value, 10) || 84)).toFixed(1) + 's）。', adv.ok ? 'ok' : 'bad');
+  }
+
+  $('sw-go').addEventListener('click', function () {
+    var mode = $('sw-mode').value;
+    var opts = scriptOpts();
+    if (mode === 'llm') {
+      opts.base = $('sw-base').value.trim();
+      opts.key = $('sw-key').value.trim();
+      opts.model = $('sw-model').value.trim();
+      if (!opts.key) { hint($('sw-status'), '✗ 先展开「API 设置」填 Key', 'bad'); return; }
+    }
+    var btn = this;
+    btn.disabled = true;
+    FS.script.generate(mode, opts, function (p) { $('sw-status').textContent = p; })
+      .then(function (out) {
+        applyScript(out);
+        hint($('sw-status'), '✓ 生成完成', 'ok');
+      })['catch'](function (e) {
+        hint($('sw-status'), '✗ ' + e.message, 'bad');
+      })['finally'](function () { btn.disabled = false; });
+  });
+
+  $('sw-apply').addEventListener('click', function () {
+    var out = FS.script.local(scriptOpts());
+    applyScript(out);
+    hint($('sw-status'), '✓ 已填进下面（没调用任何网络）', 'ok');
+  });
+
+  $('sw-advice').addEventListener('click', function () {
+    var opts = scriptOpts();
+    var adv = FS.script.advice(FS.script.local(opts).scenes, opts.bpm);
+    $('f-beats').value = adv.beats;
+    readFilm(); redraw();
+    hint($('sw-status'), '建议每段 ' + adv.beats + ' 拍（最长一段 ' + adv.longest + ' 字）', 'ok');
+  });
+
+  /* API 设置：本地存，换设备不会带过去（本来就没打算同步） */
+  function applyPreset(id) {
+    var p = FS.script.PRESETS.filter(function (x) { return x.id === id; })[0];
+    if (!p) return;
+    $('sw-base').value = p.base || cfg.base || '';
+    $('sw-model').value = p.model || cfg.model || '';
+  }
+  $('sw-preset').addEventListener('change', function () { cfg.preset = this.value; applyPreset(this.value); });
+  ['sw-base', 'sw-key', 'sw-model'].forEach(function (id) {
+    $(id).addEventListener('change', function () {
+      cfg[id] = this.value;
+      cfg.base = $('sw-base').value; cfg.model = $('sw-model').value; cfg.key = $('sw-key').value;
+      FS.script.saveCfg(cfg);
+    });
+  });
+  if (cfg.preset) $('sw-preset').value = cfg.preset;
+  applyPreset(cfg.preset || 'deepseek');
+  if (cfg.key) $('sw-key').value = cfg.key;
 
   /* ================== tab 切换 & 环境自检 ================== */
   function switchTab(key) {

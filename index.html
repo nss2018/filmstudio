@@ -28,19 +28,76 @@
     <div class="col">
       <div class="card">
         <div class="card-hd">
-          <h2>乐谱（cues.json）</h2>
+          <h2>🎼 音乐工厂</h2>
+          <span class="mono dim" id="mf-status">填个主题就能出曲</span>
+        </div>
+        <div class="field-row">
+          <label class="fl">主题<input type="text" id="mf-theme" value="群论" placeholder="写个主题：量子 / 热血少年 / 咖啡猫 / 城市"></label>
+          <label class="fl">风格<select id="mf-style"><option value="auto">自动（按主题判断）</option></select></label>
+          <label class="fl">长度<select id="mf-bars"><option>8</option><option selected>12</option><option>16</option><option>24</option><option>32</option></select> 小节</label>
+        </div>
+        <div class="field-row">
+          <label>BPM <input type="number" id="mf-bpm" placeholder="自动" min="40" max="200"></label>
+          <label class="fl">密度 <span id="mf-dens-val" class="mono dim">0.60</span>
+            <input type="range" id="mf-dens" min="0.2" max="1" step="0.05" value="0.6">
+          </label>
+          <label class="chk"><input type="checkbox" id="mf-drums" checked> 要鼓</label>
+        </div>
+        <div class="btn-row wrap">
+          <button id="mf-go" class="btn primary">🎼 生成配乐</button>
+          <button id="mf-again" class="btn">🎲 再来一首（保证不重复）</button>
+          <button id="mf-skip" class="btn">🔀 换个风格</button>
+          <button id="mf-tofilm" class="btn ghost">🎬 拿去配宣传片</button>
+        </div>
+        <div class="mf-rec" id="mf-rec"><span class="dim">这一栏会写清：这首曲子采了哪些素材、怎么改的。</span></div>
+        <div class="hint">不是纯随机（纯随机＝噪音）。它先从素材库采<b>动机 / 和声进行 / 鼓型 / 织体</b>，再用 <b>9 种变形算子</b>（逆序、移位、倒影、拉长…）重组，每个乐句都查重。同主题同种子必出同一首；换种子必换一首。</div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd">
+          <h2>乐谱编辑器</h2>
+          <div class="seg" id="edimode">
+            <button class="seg-btn active" data-mode="roll">🎹 图形</button>
+            <button class="seg-btn" data-mode="json">{ } 源码</button>
+          </div>
+        </div>
+
+        <!-- 图形：钢琴卷帘 -->
+        <div id="ed-roll">
+          <div class="roll-bar" id="roll-bar">
+            <label>BPM <input type="number" id="roll-bpm" value="84" min="40" max="200"></label>
+            <label>视图 <select id="roll-cols"><option>8</option><option selected>16</option><option>24</option><option>32</option></select> 拍</label>
+            <label>本轨循环 <input type="number" id="roll-loop" value="0" min="0" step="0.5"> 秒</label>
+            <button id="roll-play-track" class="btn ghost">▶ 试听本轨</button>
+          </div>
+          <div class="roll-wrap"><canvas id="roll"></canvas></div>
+          <div class="roll-tracks" id="roll-tracks"></div>
+          <div class="roll-ops" id="roll-ops">
+            <span class="mono dim" id="roll-selinfo">—</span>
+            <button data-act="del" data-needs="1" class="btn ghost">删除选中</button>
+            <button data-act="dur-" data-needs="1" class="btn ghost">时长 −1 拍</button>
+            <button data-act="dur+" data-needs="1" class="btn ghost">时长 +1 拍</button>
+            <button data-act="clear" class="btn ghost">清空本轨</button>
+          </div>
+          <div class="hint">点一下空格子放一个音，<b>按住拖过去会连成一条</b>；拖音符换位置，拖它右端改时长；<b>右键</b>或<b>长按</b>删除。左边点哪条轨就选中哪条。纵轴是五声音阶——所以怎么点都不难听。</div>
+        </div>
+
+        <!-- 源码：直接改 cues.json -->
+        <div id="ed-json" hidden>
+          <textarea id="score-input" spellcheck="false" rows="16"></textarea>
+          <div class="hint" id="score-status">— 改完自动解析 —</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd">
+          <h2>预设 &amp; 输出</h2>
           <div class="row-gap" id="presets">
             <button class="chip" data-preset="ui">UI 音效</button>
             <button class="chip" data-preset="loop">循环 BGM</button>
             <button class="chip" data-preset="basic">五音阶</button>
           </div>
         </div>
-        <textarea id="score-input" spellcheck="false" rows="18"></textarea>
-        <div class="hint" id="score-status">— 改完自动解析 —</div>
-      </div>
-
-      <div class="card">
-        <div class="card-hd"><h2>轨内参数</h2></div>
         <div class="field-row">
           <label>采样率
             <select id="sr-select"><option>22050</option><option selected>44100</option></select>
@@ -49,6 +106,7 @@
             <input type="range" id="master" min="0.1" max="1" step="0.05" value="0.8">
           </label>
         </div>
+        <div class="hint">图形和源码是同一份数据：在图形里画的音，切到「源码」就是标准 cues.json。</div>
       </div>
     </div>
 
@@ -93,6 +151,55 @@
   <div class="grid-2">
     <div class="col">
       <div class="card">
+        <div class="card-hd">
+          <h2>0. 文案助手（字幕从哪来）</h2>
+          <span class="mono dim" id="sw-status">—</span>
+        </div>
+        <div class="field-row">
+          <label class="fl">主题<input type="text" id="sw-topic" value="群论"></label>
+          <label class="fl">具象例子<span class="dim">（选填，填了句子更好懂）</span><input type="text" id="sw-example" placeholder="例如：旋转的正方形"></label>
+        </div>
+        <div class="field-row">
+          <label class="fl">风格
+            <select id="sw-mood"><option>科普</option><option>热血</option><option>俏皮</option><option>诗性</option></select>
+          </label>
+          <label class="fl">段数
+            <select id="sw-count"><option>3</option><option selected>4</option><option>5</option></select>
+          </label>
+          <label class="fl">用哪种
+            <select id="sw-mode"><option value="local">本地模板（不联网）</option><option value="llm">AI 生成（要 Key）</option></select>
+          </label>
+        </div>
+        <div class="btn-row">
+          <button id="sw-go" class="btn primary">✎ 生成文案</button>
+          <button id="sw-apply" class="btn">↓ 填进下面的段落</button>
+          <button id="sw-advice" class="btn ghost">给个每段拍数建议</button>
+        </div>
+        <div class="hint" id="sw-out">本地模板：不联网、不要 Key，按「主题 + 风格」拼出片名和每段字幕，同一个主题每次生成都一样，方便反复调。AI 通道：走你自己的 API Key，写脚本更灵活。</div>
+
+        <details class="fold">
+          <summary>API 设置（只存你自己浏览器里）</summary>
+          <div class="fold-body">
+            <div class="field-row">
+              <label class="fl">服务商
+                <select id="sw-preset">
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="silicon">硅基流动</option>
+                  <option value="moonshot">Moonshot</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </label>
+              <label class="fl">Base（OpenAI 兼容）<input type="text" id="sw-base" placeholder="https://api.deepseek.com/v1"></label>
+              <label class="fl">Key<input type="password" id="sw-key" placeholder="sk-…" autocomplete="off"></label>
+              <label class="fl">模型<input type="text" id="sw-model" placeholder="deepseek-chat"></label>
+            </div>
+            <div class="hint">这里是<b>浏览器直连你的 API</b>，Key 只写在 localStorage，不经过本站任何服务器。有些服务不给浏览器跨域（CORS），直连会失败——这种情况把仓库里的 <code>workers/proxy.js</code> 贴到一个 Cloudflare Worker，Base 填那个 worker 地址就行，Key 可以改在 Worker 里更保险。</div>
+          </div>
+        </details>
+      </div>
+
+      <div class="card">
         <div class="card-hd"><h2>1. 填内容</h2></div>
         <label class="fl">片名<input type="text" id="f-title" value="群论：结构之美"></label>
         <div class="field-row">
@@ -127,8 +234,10 @@
         </div>
         <div class="row-gap" style="margin-top:10px">
           <label class="chk"><input type="checkbox" id="f-music" checked> 自动生成配乐</label>
+          <button id="f-newmusic" class="btn ghost">🎼 按片名现生成一首</button>
         </div>
         <div class="hint" id="f-timing"></div>
+        <div class="hint" id="f-musicsrc">配乐来源：自动（按片名当主题生成）</div>
       </div>
 
       <div class="card">
@@ -174,6 +283,9 @@
 <script src="js/wav.js"></script>
 <script src="js/synth.js"></script>
 <script src="js/story.js"></script>
+<script src="js/factory.js"></script>
+<script src="js/roll.js"></script>
+<script src="js/script.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

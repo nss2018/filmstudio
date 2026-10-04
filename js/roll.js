@@ -42,7 +42,10 @@
     }
     if (lo === null) return 48;                 // 空轨给默认音区
     var root = 48 + Math.floor((lo - 48) / 12) * 12;
-    while (root + 21 < hi) root -= 12;          // 音太高就整体下移一个八度
+    // ⚠️ 方向不能写反：音太高说明窗口太低，root 要「上移」（+=）才追得上 hi；
+    //    写成 -= 的话条件 root+21<hi 会越来越真，while 永远出不来，整页卡死。
+    var guard = 0;
+    while (root + 21 < hi && isFinite(hi) && guard++ < 24) root += 12;
     return root;
   }
 

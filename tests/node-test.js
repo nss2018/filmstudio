@@ -10,6 +10,7 @@ require(path.join(__dirname, '..', 'js', 'wav.js'));
 require(path.join(__dirname, '..', 'js', 'synth.js'));
 require(path.join(__dirname, '..', 'js', 'story.js'));
 require(path.join(__dirname, '..', 'js', 'factory.js'));
+require(path.join(__dirname, '..', 'js', 'roll.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'core.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'lru.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'geom.js'));
@@ -531,7 +532,7 @@ ok('导出快照与当前 film 隔离（快照是深拷贝）', (() => {
   return snap.scenes[0].text === 'b';
 })());
 
-/* ---------- N. 相机安全：视线距离不得退化（3D 画面只剩天空雾的回归） ---------- */
+/* ---------- 7. 相机安全：视线距离不得退化（3D 画面只剩天空雾的回归） ---------- */
 section('\n7. 相机安全（eye-target 距离）');
 const distOf = (c) => Math.hypot(c.eye[0] - c.target[0], c.eye[1] - c.target[1], c.eye[2] - c.target[2]);
 ok('follow 回归：from/to 分列注视点两侧，中点不再穿过（距离恒 >2m）', (() => {
@@ -561,6 +562,36 @@ ok('全镜头类型 × 全进度扫描（40 种子 × 3/4/5 段）：距离恒 >
   }
   return worst > 1 ? true : '最近 ' + worst.toFixed(3) + 'm @ ' + worstAt;
 })());
+
+/* ---------- 8. 钢琴卷帘：fitRoot 不得死循环（点「生成配乐」整页卡死的回归） ---------- */
+section('\n8. 钢琴卷帘 fitRoot');
+ok('fitRoot：lo=59 hi=79（音区偏高）能返回且窗口追得上 hi', (() => {
+  // 旧代码 `while (root + 21 < hi) root -= 12` 方向写反：root 越减条件越真，
+  // while 永远出不来 —— 点「生成配乐」→ parseMusic → roll.load → fitRoot，整页卡死。
+  const notes = [{ midi: 59 }, { midi: 79 }];
+  const root = FS.roll._internal.fitRoot(notes);
+  return isFinite(root) && root + 21 >= 79;
+})(), '');
+ok('fitRoot：极端输入（hi=Infinity / 巨大音域）有 guard 不死循环', (() => {
+  const r1 = FS.roll._internal.fitRoot([{ midi: 48 }, { midi: Infinity }]);
+  const r2 = FS.roll._internal.fitRoot([{ midi: 0 }, { midi: 127 }]);
+  return isFinite(r1) && isFinite(r2);
+})(), '');
+ok('fitRoot：工厂出的每条轨（全风格 × 密度扫描）都能正常返回', (() => {
+  let calls = 0;
+  for (const st of FS.factory.STYLES) {
+    for (const d of [0.3, 0.7, 0.9]) {
+      const r = FS.factory.generate({ theme: '未命名', style: st.id, bars: 12, density: d, drums: true });
+      const sc = FS.parseScore(FS.factory.toText(r.score));
+      for (const t of sc.tracks) {
+        const root = FS.roll._internal.fitRoot(t.notes);
+        if (!isFinite(root)) return 'style=' + st.id + ' 轨 ' + t.instrument + ' 返回 ' + root;
+        calls++;
+      }
+    }
+  }
+  return true;
+})(), '');
 
 FS.renderScore(FS.parseScore(JSON.stringify(filmMusic.score)), { sampleRate: 22050 }).then(
   () => ok('工厂出的曲子能离线渲染出音频', true),

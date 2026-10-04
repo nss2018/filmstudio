@@ -110,7 +110,7 @@ select{appearance:none;padding-right:26px;
   background-position:calc(100% - 14px) 51%,calc(100% - 9px) 51%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;
 }
 input[type=range]{width:100%;max-width:200px;accent-color:var(--accent)}
-.chk{display:flex;flex-direction:row!important;align-items:center;gap:7px;color:var(--txt);font-size:13px}
+.chk{display:flex;flex-direction:row!important;align-items:center;gap:7px;color:var(--txt);font-size:13px;white-space:nowrap;padding-bottom:8px}
 
 .progress{height:4px;background:#0b0e15;border-radius:3px;margin-top:12px;overflow:hidden}
 .progress-bar{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .1s linear}

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>科普宣传片工坊 · 配乐 + 渲染，一处出片</title>
-<link rel="stylesheet" href="css/app.css?v=20261004g">
+<link rel="stylesheet" href="css/app.css?v=20261004h">
 </head>
 <body>
 <header class="topbar">
@@ -232,6 +232,10 @@
           <div class="hint">分镜是<b>种子驱动</b>的：同文案 + 同种子 = 同一部片子；点「换一版」换种子，地点走位、镜头、氛围都会变，但主角和叙事线不变。AI 导演只允许「调」，地点/角色/动作/镜头都按白名单校验，模型编的非法值会被本地规则顶掉。</div>
         </div>
 
+        <div class="field-row" id="f-scene-row" hidden>
+          <label class="fl">场景（每段一个，可手动覆盖）<select id="f-scene"></select></label>
+          <button id="f-scene-auto" class="btn ghost">🎲 按文案自动选</button>
+        </div>
         <div class="field-row" id="f-2d-row">
           <label class="fl">视觉母题
             <select id="f-template">
@@ -240,7 +244,9 @@
               <option value="bars">数据演进（柱子生长）</option>
               <option value="split">对比演示（左右分屏）</option>
               <option value="geo">几何演化（多边形）</option>
+              <option value="daily">🏠 生活场景（2D 插画 · 12 种）</option>
             </select>
+            <span class="mono dim" id="f-scene-tip" hidden>按文案自动选场景</span>
           </label>
           <label class="fl">配色
             <select id="f-palette">
@@ -319,21 +325,26 @@
   <span class="mono" id="probe-badge"></span>
 </footer>
 
-<script src="js/score.js?v=20261004f"></script>
-<script src="js/wav.js?v=20261004f"></script>
-<script src="js/synth.js?v=20261004f"></script>
-<script src="js/story.js?v=20261004f"></script>
-<script src="js/factory.js?v=20261004f"></script>
-<script src="js/gl/core.js?v=20261004f"></script>
-<script src="js/gl/lru.js?v=20261004f"></script>
-<script src="js/gl/geom.js?v=20261004f"></script>
-<script src="js/gl/camera.js?v=20261004f"></script>
-<script src="js/gl/world.js?v=20261004f"></script>
-<script src="js/gl/cast.js?v=20261004f"></script>
-<script src="js/gl/render.js?v=20261004f"></script>
-<script src="js/director.js?v=20261004g"></script>
-<script src="js/roll.js?v=20261004f"></script>
-<script src="js/script.js?v=20261004f"></script>
-<script src="js/main.js?v=20261004f"></script>
+<script src="js/score.js?v=20261004h"></script>
+<script src="js/wav.js?v=20261004h"></script>
+<script src="js/synth.js?v=20261004h"></script>
+<script src="js/story.js?v=20261004h"></script>
+<script src="js/factory.js?v=20261004h"></script>
+<script src="js/gl/core.js?v=20261004h"></script>
+<script src="js/gl/lru.js?v=20261004h"></script>
+<script src="js/gl/geom.js?v=20261004h"></script>
+<script src="js/gl/camera.js?v=20261004h"></script>
+<script src="js/gl/world.js?v=20261004h"></script>
+<script src="js/gl/cast.js?v=20261004h"></script>
+<script src="js/gl/render.js?v=20261004h"></script>
+<script src="js/director.js?v=20261004h"></script>
+<script src="js/gl/world2.js?v=20261004h"></script>
+<script src="js/scene2d/core.js?v=20261004h"></script>
+<script src="js/scene2d/scenes.js?v=20261004h"></script>
+<script src="js/scene2d/scenes2.js?v=20261004h"></script>
+<script src="js/scene2d/pick.js?v=20261004h"></script>
+<script src="js/roll.js?v=20261004h"></script>
+<script src="js/script.js?v=20261004h"></script>
+<script src="js/main.js?v=20261004h"></script>
 </body>
 </html>

@@ -384,6 +384,7 @@
       (film.beats * 60 / film.bpm).toFixed(2) + 's · 全长 ' + tl.total.toFixed(2) + 's';
     drawTimeline();
     drawDots(tl);
+    if (film.template === 'daily') applyScenes();
   }
 
   function addScene(scene) {
@@ -677,12 +678,69 @@
     if (!gl3d || !gl3d.lastInfo) { hint(el, gl3d ? '点「按文案生成分镜」开始' : 'WebGL 还没初始化'); return; }
     var i = gl3d.lastInfo;
     var st = gl3d.stats();
+    var le = gl3d.lastError || {};
+    // 画面只有光影=几何没画出来时，这几个字段直接指认原因，不用猜
+    var diag = 'GL:' + (le.glErrorName || '?') +
+      ' · 着色器' + (le.program ? 'ok' : '失败') +
+      ' · 帧缓冲' + (le.framebuffer ? 'ok' : '失败') +
+      ' · uniform' + ((le.uProj && le.uModel && le.uView) ? 'ok' : '缺') +
+      ' · 场景几何' + (le.drewSolid ? '已上传' : '空') +
+      ' · 本帧角色' + (le.drewCast || 0);
     hint(el, '第 ' + (i.shotIndex + 1) + ' 段 · ' + i.placeName + ' · 镜头 ' + i.shotType +
       ' · ' + i.mood + ' · 出场 ' + (i.cast.join('、') || '（无角色）') +
       ' · 三角面 ' + st.tris + ' · 缓存 ' + st.places + '/' + st.placeMax + ' 场景' +
       (st.evicted ? ' · 已淘汰 ' + st.evicted : '') +
-      ' · ' + (st.bloom ? '辉光开' : '辉光关'), 'ok');
+      ' · ' + (st.bloom ? '辉光开' : '辉光关') + ' ｜ ' + diag, 'ok');
   }
+
+  /* ---------------- 2D 生活场景：选景 ---------------- */
+  function fillSceneSelect() {
+    var sel = $('f-scene');
+    if (!sel || !FS.s2dScenes || !FS.s2dScenes.meta) return;
+    var cur = sel.value;
+    sel.innerHTML = '';
+    var auto = document.createElement('option');
+    auto.value = '';
+    auto.textContent = '自动（按文案判断）';
+    sel.appendChild(auto);
+    Object.keys(FS.s2dScenes.meta).forEach(function (k) {
+      var o = document.createElement('option');
+      o.value = k;
+      o.textContent = FS.s2dScenes.meta[k].name + '（' + FS.s2dScenes.meta[k].tags.join('·') + '）';
+      sel.appendChild(o);
+    });
+    if (cur) sel.value = cur;
+  }
+
+  /** 按当前文案给每段选场景；手动指定时所有段都用它 */
+  function applyScenes() {
+    if (film.template !== 'daily') { film.scenes2d = null; return; }
+    var manual = $('f-scene') && $('f-scene').value;
+    if (manual) {
+      film.scenes2d = film.scenes.map(function () { return manual; });
+    } else if (FS.s2dPick) {
+      film.scenes2d = FS.s2dPick.pickScenes(film.scenes, film.sbSeed || 0);
+    }
+    var names = (film.scenes2d || []).map(function (id) {
+      return (FS.s2dScenes.meta && FS.s2dScenes.meta[id] || {}).name || id;
+    });
+    var tip = $('f-scene-tip');
+    if (tip) { tip.hidden = false; tip.textContent = (manual ? '已手动指定 · ' : '自动 · ') + names.join(' → '); }
+  }
+
+  function syncTemplateUI() {
+    var isDaily = film.template === 'daily';
+    var row = $('f-scene-row');
+    if (row) row.hidden = !isDaily;
+    if (isDaily) { fillSceneSelect(); applyScenes(); }
+  }
+
+  $('f-scene').addEventListener('change', function () { readFilm(); applyScenes(); redraw(); });
+  $('f-scene-auto').addEventListener('click', function () {
+    $('f-scene').value = '';
+    film.sbSeed = (FS.director.fnv(String(film.sbSeed) + '|s2d')) >>> 0;
+    readFilm(); applyScenes(); redraw();
+  });
 
   $('f-engine').addEventListener('change', function () { setEngine(this.value); });
   $('f3d-go').addEventListener('click', function () { runDirector($('f3d-mode').value); });
@@ -692,14 +750,33 @@
     runDirector($('f3d-mode').value);
   });
 
+  /* ---------------- 唯一的时间推进控制器 ----------------
+   * 借鉴 hyperframes 的「player owns playback / timelines start paused」：
+   * 播放与停止只能由一个控制器说了算。这里曾有**两条推进链**——预览走 rAF、
+   * 导出走 setTimeout，而 filmStop() 只 cancel 了前者（导出时 fRAF 是 null），
+   * 于是导出过程中点「停止」毫无反应。现在两条链都登记到 drive：
+   * 停止 = token 自增（让在跑的链自行退出）+ 清掉 rAF / timer。
+   */
+  var drive = { raf: 0, timer: 0, token: 0 };
+
+  function driveCancel() {
+    drive.token++;
+    if (drive.raf) { root.cancelAnimationFrame(drive.raf); drive.raf = 0; }
+    if (drive.timer) { root.clearTimeout(drive.timer); drive.timer = 0; }
+  }
+  function driveToken() { return drive.token; }
+  function driveAlive(tok) { return tok === drive.token; }
+
   function filmStop() {
     fPlaying = false;
-    if (fRAF) root.cancelAnimationFrame(fRAF);
-    fRAF = null;
+    driveCancel();
     if (fNode) { try { fNode.stop(); } catch (e) {} fNode = null; }
     narrStopAll();
     $('f-preview').textContent = '▶ 预览播放';
+    if (fStatusAbort) fStatusAbort('已停止');
   }
+  /** 导出/播放被中止时的收尾（由 drive token 触发） */
+  var fStatusAbort = null;
 
   function filmPlay() {
     var tl = FS.story.timeline(film);
@@ -721,6 +798,7 @@
       narrStopAll();                               // 双保险：清掉任何残留排程，杜绝重叠语音
       narrStartAt(plan, c, fT0, c.destination);
       fPlaying = true;
+      tickFilm.tok = driveToken();   // 记下本轮 token：被「停止」作废后 tickFilm 会自行退出
       $('f-preview').textContent = '❚❚ 播放中';
       tickFilm();
     })['catch'](function (e) {
@@ -729,7 +807,7 @@
   }
 
   function tickFilm() {
-    if (!fPlaying) return;
+    if (!fPlaying || !driveAlive(tickFilm.tok)) return;
     var c = live;
     var t = c.currentTime - fT0;
     var tl = FS.story.timeline(film);
@@ -739,7 +817,7 @@
     $('f-clock').textContent = t.toFixed(2) + 's';
     paint(t);
     markDots(t);
-    if (fPlaying) fRAF = root.requestAnimationFrame(tickFilm);
+    if (fPlaying) drive.raf = root.requestAnimationFrame(tickFilm);
   }
 
   function filmJump(t) {
@@ -754,7 +832,7 @@
   $('f-stop').addEventListener('click', filmStop);
 
   ['f-title', 'f-template', 'f-palette', 'f-bpm', 'f-beats', 'f-sub'].forEach(function (id) {
-    $(id).addEventListener('change', function () { readFilm(); redraw(); });
+    $(id).addEventListener('change', function () { readFilm(); syncTemplateUI(); redraw(); });
     $(id).addEventListener('input', function () { readFilm(); redraw(); });
   });
   $('f-music').addEventListener('change', function () { readFilm(); });
@@ -824,6 +902,17 @@
     fVoiceNodes = [];
   }
 
+  /** 导出被「停止」打断时的收尾：停录、停音频、恢复按钮、给出可读原因 */
+  function abortExport(rec, node, btn, k, frames) {
+    try { if (rec && rec.state !== 'inactive') rec.stop(); } catch (e) {}
+    try { if (node) { node.stop(); node.disconnect(); } } catch (e) {}
+    if (btn) btn.disabled = false;
+    fNode = null; fPlaying = false;
+    drive.timer = 0;
+    if (gl3d && film.sb) gl3d.setStoryboard(film.sb);   // 恢复预览用的分镜
+    hint($('f-status'), '⏹ 已停止在第 ' + k + '/' + frames + ' 帧', 'ok');
+  }
+
   function filmRenderAudio() {
     var sc = FS.parseScore(JSON.stringify(filmCues()));   // 顺带校验，坏谱会给人话错误
     return FS.renderScore(sc, { sampleRate: 44100 });
@@ -879,6 +968,7 @@
 
     var btn = this;
     btn.disabled = true;
+    driveCancel();          // 连续导出两次时，先把上一轮残留的链作废
     var snap = filmSnapshot();                       // 快照：导出期间改界面不影响成片
     var sbSnap = film.sb;
     var tl = FS.story.timeline(snap);
@@ -943,7 +1033,9 @@
         }, Math.max(150, remain * 1000));
       }
 
+      var myTok = driveToken();
       function step() {
+        if (!driveAlive(myTok)) { abortExport(rec, node, btn, k, frames); return; }
         if (k >= frames) { finish(); return; }
         var t = k / EXPORT_FPS;                        // ★ 时间只由帧号决定
         paint(t, snap);
@@ -954,7 +1046,7 @@
         bar.style.width = Math.min(100, k / frames * 100) + '%';
         // 限速：不比实时快，否则音频先放完、画面还在推 → 音画错位
         var due = k * (1000 / EXPORT_FPS);
-        setTimeout(step, Math.max(0, due - now()));
+        drive.timer = setTimeout(step, Math.max(0, due - now()));
       }
       setTimeout(step, 0);
     })['catch'](function (e) {

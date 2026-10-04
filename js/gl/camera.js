@@ -114,9 +114,10 @@
         var ang = (e - 0.5) * 0.6;                          // 左右各 17°，避免转到背面穿帮
         var base = Math.atan2(to[2] - tg[2], to[0] - tg[0]);
         var a = base + ang;
-        out.eye = [tg[0] + Math.cos(a) * dist,
+        var r = dist * (1.15 - 0.3 * e);   // 顺带推近 15%：纯绕圈不像跟拍，推进才有跟的感觉
+        out.eye = [tg[0] + Math.cos(a) * r,
                    lerp(from[1], to[1], e),
-                   tg[2] + Math.sin(a) * dist];
+                   tg[2] + Math.sin(a) * r];
         out.target = tg.slice();
         out.fov = lerp(fov, fovTo, e);
         break;

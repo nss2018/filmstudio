@@ -35,6 +35,9 @@
 'use strict';
 var Q = new URLSearchParams(location.search);
 var GW = +(Q.get('w') || 1280), GH = +(Q.get('h') || 720), GN = +(Q.get('n') || 6);
+// at=1.2,5.5,9 按「秒」指定采样点（不给就按每段中后段取样）
+var AT = (Q.get('at') || '').split(',').filter(Boolean).map(Number).filter(function (v) { return isFinite(v); });
+var USE_AT = AT.length > 0;
 var glc = document.getElementById('gl'); glc.width = GW; glc.height = GH;
 
 var out = [];
@@ -108,14 +111,16 @@ try {
     var cv = document.createElement('canvas'); cv.width = 426; cv.height = 240;
     var tag = document.createElement('div'); tag.className = 'tag';
     wrap.appendChild(cv); wrap.appendChild(tag); grid.appendChild(wrap);
-    var t = acc + sb.shots[k].durationSec * 0.55;   // 取本段中后段，动作与镜头都展开了
+    var t = USE_AT ? AT[k % AT.length]
+                  : acc + sb.shots[k].durationSec * 0.55;   // 默认取本段中后段，动作与镜头都展开了
     acc += sb.shots[k].durationSec;
     var ctx2 = cv.getContext('2d');
     ctx2.fillStyle = '#000'; ctx2.fillRect(0, 0, cv.width, cv.height);
     try {
       var info = engine.drawAt(t, ctx2);
+      var le = engine.lastError || {};
       if (info) okFrames++;
-      tag.textContent = (k + 1) + '. ' + info.placeName + ' · ' + info.shotType;
+      tag.textContent = (k + 1) + '. ' + info.placeName + ' · ' + info.shotType + ' · ' + t.toFixed(2) + 's';
       // 顺便看这一帧到底画了东西没有（采样非黑像素比例）
       var d = ctx2.getImageData(0, 0, cv.width, cv.height).data;
       var lit = 0, sum = 0;
@@ -126,6 +131,12 @@ try {
       var samples = Math.ceil(d.length / (4 * 37));
       var ratio = lit / samples, avg = sum / samples;
       tag.textContent += ' · 亮像素 ' + (ratio * 100).toFixed(0) + '% · 均亮 ' + avg.toFixed(0);
+      log('    ── 采样点 ' + t.toFixed(2) + 's ──');
+      log('    GL ' + (le.glErrorName || '?') +
+        ' · 着色器' + (le.program ? 'ok' : '失败') +
+        ' · 帧缓冲' + (le.framebuffer ? 'ok' : '失败') +
+        ' · uniform' + ((le.uProj && le.uModel && le.uView && le.uLightPos) ? 'ok' : '缺') +
+        ' · 场景几何' + (le.drewSolid ? '已上传' : '空'));
       log('    段' + (k + 1) + ' ' + info.placeName + ' 镜头' + info.shotType +
           ' 光' + info.mood + ' 三角面' + (engine.stats().tris) +
           ' 亮像素' + (ratio * 100).toFixed(0) + '% 均亮' + avg.toFixed(0),
@@ -139,8 +150,17 @@ try {
       (errs.length ? '，' + errs.length + ' 帧出错' : ''), okFrames === nShot ? 'ok' : 'bad');
   var st = engine.stats();
   log('[6] 资源: 场景缓存 ' + st.places + ' / 角色缓存 ' + st.casts + ' / 累计三角面 ' + st.tris, 'dim');
-  log('[7] 结论: ' + (okFrames === nShot && st.tris > 500 ? '引擎可用 ✓' : '有问题 ✗'),
-      okFrames === sb.shots.length && st.tris > 500 ? 'ok' : 'bad');
+  var lastLe = engine.lastError || {};
+  var glBad = lastLe.glError !== 0 || !lastLe.program || !lastLe.framebuffer || !lastLe.drewSolid;
+  var verdict = (okFrames !== nShot) ? '有帧渲染抛错 ✗'
+    : (st.tris <= 500) ? '三角面为 0 —— 场景几何没生成 ✗'
+    : glBad ? ('引擎起来了但 GL 报错（' + (lastLe.glErrorName || '?') + '），画面可能只有光影 ✗')
+    : '引擎可用 ✓（几何、光照、帧缓冲都正常，画面里应该有内容）';
+  log('[7] 结论: ' + verdict, verdict.indexOf('✓') > 0 ? 'ok' : 'bad');
+  if (verdict.indexOf('✓') < 0) {
+    log('    排查顺序：① 上面每帧的 GL 错误名 ② 场景几何是否「已上传」 ③ 帧缓冲是否 ok', 'dim');
+    log('    若三项都 ok 但画面仍空 → 问题在着色器数学（相机/投影），把这一页截图发出去即可定位', 'dim');
+  }
 } catch (e) {
   log('✗ 整体异常: ' + e.message, 'bad');
   if (e.stack) log(String(e.stack).split('\n').slice(0, 4).join('\n'), 'dim');

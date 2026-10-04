@@ -327,7 +327,46 @@
     g.restore();
   }
 
-  var TEMPLATES = { concept: drawConcept, formula: drawFormula, bars: drawBars, split: drawSplit, geo: drawGeo };
+  /* ---------------- 生活场景（2D 插画） ---------------- */
+  // 与 2D 母题并行的第 6 种画面类型：低多边形插画风的生活场景。
+  // 场景可按文案自动选（FS.s2dPick，��用 3D 导演层同一份词典），也可在界面上手动指定。
+  function drawDaily(g, story, sc, p, t, alpha) {
+    var R = FS.s2dScenes;
+    if (!R) { drawConcept(g, story, sc, p, t, alpha); return; }
+    var id = (story.scenes2d && story.scenes2d[sc.i]) ||
+             (FS.s2dPick && FS.s2dPick.pickScene((sc.title || '') + ' ' + (sc.text || ''), sc.i)) || 'cafe';
+    var fn = R[id];
+    if (typeof fn !== 'function') fn = R.cafe || R.street;
+    if (!fn) { drawConcept(g, story, sc, p, t, alpha); return; }
+    g.save();
+    g.globalAlpha = alpha;
+    // 段间交叉淡入：每段前后各 0.35s 叠化，避免硬切
+    fn(g, t, p, { mood: story.palette, place: id, scene: sc });
+    g.restore();
+    // 场景名角标（右上角小字，方便确认「这段用的是哪个场景」）
+    var meta = R.meta && R.meta[id];
+    if (meta && story.sceneLabel !== false) {
+      g.save();
+      g.globalAlpha = alpha * 0.55;
+      g.font = '12px ui-monospace,monospace';
+      g.textAlign = 'right';
+      g.fillStyle = hexA(pal(story.palette).text, .8);
+      g.fillText('场景 · ' + meta.name, W - 16, 28);
+      g.restore();
+    }
+    // 段标题（小字，左上）
+    if (sc.title) {
+      g.save();
+      g.globalAlpha = alpha * 0.9;
+      g.font = font(30, 600);
+      g.fillStyle = pal(story.palette).text;
+      g.textAlign = 'left';
+      g.fillText(sc.title, 56, 66);
+      g.restore();
+    }
+  }
+
+  var TEMPLATES = { concept: drawConcept, formula: drawFormula, bars: drawBars, split: drawSplit, geo: drawGeo, daily: drawDaily };
   FS.templates = Object.keys(TEMPLATES);
 
   /** 画一帧。t 是全局时间（秒）。设计坐标系 1280×720，画布更大时整体等比放大。 */
@@ -424,7 +463,7 @@
   }
 
   FS.story = {
-    W: W, H: H, timeline: timeline, drawFrame: drawFrame,
+    W: W, H: H, timeline: timeline, drawFrame: drawFrame, drawDaily: drawDaily,
     buildScore: buildScore, palette: pal, midi2name: midi2name
   };
 })(window);

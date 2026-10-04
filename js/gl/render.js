@@ -85,7 +85,13 @@
     'in vec2 vUv;',
     'uniform vec3 uTop, uBottom;',
     'out vec4 frag;',
-    'void main(){ frag = vec4(mix(uBottom, uTop, pow(vUv.y, 0.85)), 1.0); }'
+    // 全屏线性渐变在深色背景下编码成 H.264 会出现色带（hyperframes 明确警告过这点），
+    // 加一点屏幕空间抖动把色带打碎，成本几乎为零。
+    'void main(){',
+    '  vec3 c = mix(uBottom, uTop, pow(vUv.y, 0.85));',
+    '  float d = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;',
+    '  frag = vec4(c + d / 255.0, 1.0);',
+    '}'
   ].join('\n');
 
   var FS_BRIGHT = [
@@ -217,6 +223,7 @@
       gl: gl,
       storyboard: null,
       lastInfo: null,
+      lastError: null,   // 自检页读这个：GL 错误码 / 关键 uniform 是否为 null
 
       setStoryboard: function (sb) { engine.storyboard = sb; },
       setSubtitles: function (on) { subOn = !!on; },
@@ -385,6 +392,18 @@
           progress: local, bloom: bloomOn
         };
         engine.lastInfo = info2;
+        // 顺手抓 GL 错误：画面为空时这行能直接告诉我们是 shader/纹理/帧缓冲哪一步挂了
+        var err = gl.getError();
+        engine.lastError = {
+          glError: err,
+          glErrorName: err === 0 ? 'NO_ERROR' : (err === 0x0500 ? 'INVALID_ENUM' :
+            err === 0x0501 ? 'INVALID_VALUE' : err === 0x0502 ? 'INVALID_OPERATION' :
+            err === 0x0506 ? 'INVALID_FRAMEBUFFER_OPERATION' : ('0x' + err.toString(16))),
+          uProj: !!uMain.uProj, uModel: !!uMain.uModel, uView: !!uMain.uView,
+          uLightPos: !!uMain['uLightPos[0]'],
+          program: !!progMain, framebuffer: rtScene.ok, tris: info2.tris,
+          drewSolid: !!pm.solid, drewWater: !!pm.water, drewCast: shot.cast.length
+        };
         if (outCtx) {
           outCtx.drawImage(canvas, 0, 0, outCtx.canvas.width, outCtx.canvas.height);
           drawOverlay(outCtx, sb, shot, local, t, info2, subOn);

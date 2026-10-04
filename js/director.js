@@ -24,7 +24,9 @@
   /** 地点关键词 → place id（先命中先赢；都没命中走 seed 落表） */
   var PLACE_WORDS = {
     cafe: ['咖啡', '拿铁', '杯', '吧台', '烘焙', '甜点', '小店', '咖啡馆', '馆'],
-    street: ['街', '马路', '路', '城市', '通勤', '车', '大楼', '霓虹', '都市', '广场'],
+    // '通勤'/'车' 归 metro：留在 street 会和地铁站抢命中（同权重时随机，
+    // 「地铁通勤」会判成街道）。'街/马路/路/城市/大楼/霓虹' 才是街道的专属词。
+    street: ['街', '马路', '路', '城市', '大楼', '霓虹', '都市', '广场'],
     park: ['公园', '树', '草地', '长椅', '散步', '林荫', '花', '草坪', '林'],
     seaside: ['海', '浪', '沙滩', '海边', '礁石', '椰', '日落', '黄昏', '潮', '港'],
     study: ['书', '读', '学习', '教室', '黑板', '知识', '图书馆', '写字', '阅读', '讲义'],
@@ -32,7 +34,13 @@
     kitchen: ['厨', '做饭', '吃', '餐桌', '锅', '菜', '厨房', '汤', '灶'],
     // 「夜」这种单字太宽（夜晚氛围 ≠ 夜市），地点词表里只留「夜市」这种具体词；
     // 「夜」留给下面的 MOOD_WORDS 判断氛围。
-    nightmarket: ['夜市', '摊', '市集', '灯笼', '热闹', '小吃', '摆摊']
+    nightmarket: ['夜市', '摊', '市集', '灯笼', '热闹', '小吃', '摆摊'],
+    bedroom: ['卧室', '床', '睡觉', '被窝', '枕', '起床', '卧室里'],
+    market: ['菜市场', '菜场', '买菜', '摊主', '讨价', '菜筐', '果摊', '菜市场里'],
+    metro: ['地铁', '站台', '地铁站', '车厢', '候车', '闸机', '通勤'],
+    campus: ['校园', '学校', '操场', '教室', '操场', '同学', '校园里', '上课'],
+    rainstreet: ['下雨', '雨天', '雨夜', '雨巷', '撑伞', '湿漉', '雨天街'],
+    balcony: ['阳台', '天台', '晒太阳', '晾衣', '楼下', '阳台上']
   };
 
   /** 角色关键词 → cast id */
@@ -59,13 +67,14 @@
 
   /** 角色只能在这些地方待着（不在列表里 = 该角色不该出现在此场景） */
   var HABITAT = {
-    fish: ['seaside', 'park'],
-    butterfly: ['park', 'seaside', 'street', 'cafe'],
-    bird: ['park', 'seaside', 'street'],
-    cat: ['cafe', 'street', 'park', 'kitchen', 'study', 'nightmarket'],
-    dog: ['park', 'street', 'seaside', 'cafe', 'nightmarket'],
-    rabbit: ['park', 'street', 'seaside'],
-    person: ['cafe', 'street', 'park', 'seaside', 'study', 'lab', 'kitchen', 'nightmarket']
+    fish: ['seaside', 'park'],                                  // 水生：只在水边
+    butterfly: ['park', 'seaside', 'street', 'cafe', 'market', 'balcony', 'campus'],
+    bird: ['park', 'seaside', 'street', 'campus', 'balcony'],
+    cat: ['cafe', 'street', 'park', 'kitchen', 'study', 'nightmarket', 'bedroom', 'balcony', 'market'],
+    dog: ['park', 'street', 'seaside', 'cafe', 'nightmarket', 'rainstreet', 'campus', 'market', 'balcony'],
+    rabbit: ['park', 'street', 'seaside', 'balcony', 'campus'],
+    person: ['cafe', 'street', 'park', 'seaside', 'study', 'lab', 'kitchen', 'nightmarket',
+             'bedroom', 'market', 'metro', 'campus', 'rainstreet', 'balcony']
   };
 
   /** 情绪关键词 → 光线/氛围 */
@@ -85,7 +94,13 @@
     study: { sit: [[0, -1.15]], stand: [[-2.4, -2.6], [1.6, -2.4]] },
     lab: { sit: [], stand: [[-.6, -1.5], [1.2, -1.6], [-1.8, -.8]] },
     kitchen: { sit: [[1.2, -0.35], [1.2, 1.55]], stand: [[-2.4, -3], [0.4, -2.6]] },
-    nightmarket: { sit: [], stand: [[-1.6, -9], [-1.4, -2.8], [-1.8, 3.4], [-1.5, 9.6]] }
+    nightmarket: { sit: [], stand: [[-1.6, -9], [-1.4, -2.8], [-1.8, 3.4], [-1.5, 9.6]] },
+    bedroom: { sit: [[-2.2, 1.2]], stand: [[0.4, 1.4], [-1.6, 2.4], [2.2, -2.2]] },
+    market: { sit: [], stand: [[0.2, 1.4], [2.4, 1.6], [-1.8, 0.4], [3.6, -1.2]] },
+    metro: { sit: [], stand: [[-3.2, -1.6], [-1.4, -2.2], [2.2, -1.4], [3.8, 0.4]] },
+    campus: { sit: [], stand: [[-4.5, 3.4], [2.5, 4.2], [6, 2], [-6, 1]] },
+    rainstreet: { sit: [], stand: [[-4.4, -3], [4.4, 2], [-3.4, 4], [2.6, -5]] },
+    balcony: { sit: [[3.4, -3.4]], stand: [[-2, 1.4], [1.4, 2], [-3.6, -1]] }
   };
 
   /** 曲式：不同段数配不同镜头节奏 */
@@ -170,7 +185,7 @@
 
   function placeIndoor(id) {
     var p = FS.world.placeById(id);
-    return !!(p && ['cafe', 'study', 'lab', 'kitchen'].indexOf(id) >= 0);
+    return !!(p && ['cafe', 'study', 'lab', 'kitchen', 'bedroom', 'metro'].indexOf(id) >= 0);
   }
 
   /** 这个角色能不能出现在这个地点；不能的话给一个替代方案 */
@@ -430,7 +445,13 @@
     study: ['lab', 'cafe'],
     lab: ['study'],
     kitchen: ['cafe', 'nightmarket'],
-    nightmarket: ['street', 'cafe']
+    nightmarket: ['street', 'cafe'],
+    bedroom: ['balcony', 'study'],
+    market: ['street', 'nightmarket'],
+    metro: ['street', 'rainstreet'],
+    campus: ['park', 'street'],
+    rainstreet: ['street', 'nightmarket', 'balcony'],
+    balcony: ['bedroom', 'seaside', 'park']
   };
 
   function r3(x) { return Math.round(x * 1000) / 1000; }

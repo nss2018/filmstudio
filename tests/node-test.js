@@ -18,6 +18,11 @@ require(path.join(__dirname, '..', 'js', 'gl', 'camera.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'world.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'cast.js'));
 require(path.join(__dirname, '..', 'js', 'director.js'));
+require(path.join(__dirname, '..', 'js', 'gl', 'world2.js'));
+require(path.join(__dirname, '..', 'js', 'scene2d', 'core.js'));
+require(path.join(__dirname, '..', 'js', 'scene2d', 'scenes.js'));
+require(path.join(__dirname, '..', 'js', 'scene2d', 'scenes2.js'));
+require(path.join(__dirname, '..', 'js', 'scene2d', 'pick.js'));
 const FS = global.FS;
 
 let pass = 0, fail = 0;
@@ -85,6 +90,10 @@ function stubCtx() {
     fillRect: () => ctx.calls++, strokeRect: () => ctx.calls++, clearRect: () => ctx.calls++,
     beginPath: noop, closePath: noop, moveTo: () => ctx.calls++, lineTo: () => ctx.calls++,
     arc: () => ctx.calls++, stroke: () => ctx.calls++, fill: () => ctx.calls++,
+    // 生活场景（daily 母题）用到曲线与椭圆，缺一个就整段母题自检挂掉
+    quadraticCurveTo: () => ctx.calls++, bezierCurveTo: () => ctx.calls++,
+    ellipse: () => ctx.calls++, rect: () => ctx.calls++, clip: noop,
+    setLineDash: noop,
     save: noop, restore: noop, translate: noop, rotate: noop, scale: noop,
     fillText: (t, x, y) => { if (typeof x !== 'number' || !isFinite(x)) throw new Error('fillText 的坐标不是数字: ' + t); ctx.calls++; },
     strokeText: noop,
@@ -320,7 +329,7 @@ ok('非均匀缩放后法线仍朝外（逆转置生效）', (() => {
 
 // 场景
 section('7. 生活场景库');
-ok('地点库有 8 个场景', FS.world.PLACES.length === 8, '(' + FS.world.PLACES.map((p) => p.name).join('、') + ')');
+ok('地点库有 14 个场景', FS.world.PLACES.length === 14, '(' + FS.world.PLACES.map((p) => p.name).join('、') + ')');
 const placeStat = FS.world.PLACES.map((p) => {
   const b = FS.world.buildPlace(p.id, FS.director.mkRng(1).f);
   return { id: p.id, tris: b.solid.idx.length / 3, lights: b.lights.length, sky: !!b.sky, fog: !!b.fog };
@@ -390,9 +399,11 @@ section('9b. 机位安全：室内不出墙、走廊不出廊、任何机位不�
 {
   const D = FS.director;
   const CAM_R = D.CAM_R, CAM_BOX = D.CAM_BOX;
-  const INDOOR = { cafe: 1, study: 1, lab: 1, kitchen: 1 };
+  // 与 director.placeIndoor 同步（新增 bedroom/metro 是室内）
+  const INDOOR = { cafe: 1, study: 1, lab: 1, kitchen: 1, bedroom: 1, metro: 1 };
   // 与 world.js 同步：各地雾的 near/far（改了那边要同步）
-  const FOG = { cafe: [7, 26], street: [16, 62], park: [18, 70], seaside: [22, 80], study: [6, 22], lab: [8, 28], kitchen: [6, 22], nightmarket: [8, 34] };
+  const FOG = { cafe: [7, 26], street: [16, 62], park: [18, 70], seaside: [22, 80], study: [6, 22], lab: [8, 28], kitchen: [6, 22], nightmarket: [8, 34],
+    bedroom: [6, 20], market: [12, 40], metro: [8, 30], campus: [20, 62], rainstreet: [8, 34], balcony: [14, 52] };
   let bad = 0, msg = '';
   FS.world.placeIds().forEach((place) => {
     const maxR = CAM_R[place] || 14;
@@ -641,6 +652,137 @@ ok('fitRoot：工厂出的每条轨（全风格 × 密度扫描）都能正常�
   return true;
 })(), '');
 
+/* ---------- 13. 2D 生活场景 + 3D 场景扩充 ---------- */
+section('13. 生活场景（2D 插画 + 3D 扩充）');
+
+// --- 2D 场景库 ---
+const S2D = FS.s2dScenes;
+const s2dIds = Object.keys(S2D.meta);
+ok('2D 生活场景有 12 个', s2dIds.length === 12, '(' + s2dIds.length + ' 个)');
+ok('每个 2D 场景都有中文名与标签', s2dIds.every((k) => S2D.meta[k] && S2D.meta[k].name && S2D.meta[k].tags.length));
+ok('每个 2D 场景都有对应的 draw 函数', s2dIds.every((k) => typeof S2D[k] === 'function'));
+
+// stub canvas：只记录调用，验证不抛异常且真的画了东西
+function s2dCtx() {
+  const c = { canvas: { width: 1280, height: 720 }, fillStyle: '', strokeStyle: '', lineWidth: 1,
+    globalAlpha: 1, font: '', textAlign: '', textBaseline: '', lineCap: '',
+    shadowColor: '', shadowBlur: 0, shadowOffsetY: 0 };
+  let n = 0;
+  ['save','restore','beginPath','closePath','moveTo','lineTo','arc','ellipse','quadraticCurveTo',
+   'bezierCurveTo','rect','fill','stroke','fillRect','strokeRect','fillText','translate','scale',
+   'rotate','setLineDash','clip'].forEach((k) => { c[k] = () => { n++; }; });
+  c.createLinearGradient = c.createRadialGradient = () => ({ addColorStop: () => {} });
+  c.measureText = () => ({ width: 10 });
+  c.calls = () => n;
+  return c;
+}
+ok('12 个 2D 场景 × 3 个时刻都能画且不抛异常', (() => {
+  const bad = [];
+  s2dIds.forEach((id) => {
+    [0, 1.7, 4.2].forEach((t) => {
+      try {
+        const c = s2dCtx();
+        S2D[id](c, t, t / 10, { mood: 'day' });
+        if (c.calls() < 50) bad.push(id + '@' + t + ' 绘制调用过少');
+      } catch (e) { bad.push(id + '@' + t + ': ' + e.message); }
+    });
+  });
+  return bad.length === 0;
+})(), '');
+ok('2D 场景里有真人剪影（人物不是画的贴图）', (() => {
+  // personSil 被至少 6 个场景用到：生活场景得有人在
+  let n = 0;
+  s2dIds.forEach((id) => {
+    const src = S2D[id].toString();
+    if (src.indexOf('personSil') >= 0) n++;
+  });
+  return n >= 6;
+})(), '');
+
+// --- 按文案自动选景（与 3D 共用词典）---
+ok('按文案选景：下雨撑伞 → 雨巷', FS.s2dPick.pickScene('下雨了，撑伞走在街头', 1) === 'rainy',
+  '(得到 ' + FS.s2dPick.pickScene('下雨了，撑伞走在街头', 1) + ')');
+ok('按文案选景：菜市场 → 菜市场', FS.s2dPick.pickScene('讨价还价的菜市场', 1) === 'market',
+  '(得到 ' + FS.s2dPick.pickScene('讨价还价的菜市场', 1) + ')');
+ok('按文案选景：地铁通勤 → 地铁', FS.s2dPick.pickScene('地铁通勤的站台', 1) === 'metro',
+  '(得到 ' + FS.s2dPick.pickScene('地铁通勤的站台', 1) + ')');
+ok('2D 画不出的地点会语义退到最像的场景（厨房→咖啡馆）',
+  FS.s2dPick.pickScene('厨房的灯亮着，孩子在桌边吃面', 1) === 'cafe',
+  '(得到 ' + FS.s2dPick.pickScene('厨房的灯亮着，孩子在桌边吃面', 1) + ')');
+ok('选景结果永远是 2D 画得出的场景', (() => {
+  const texts = ['卧室里的清晨', '雨夜街头', '地铁通勤', '阳台上晒太阳', '海边的黄昏',
+                '公园长椅', '夜市小吃', '菜市场', '校园操场', '咖啡馆', '书房', '街道'];
+  return texts.every((t) => typeof S2D[FS.s2dPick.pickScene(t, 3)] === 'function');
+})());
+ok('选景可复现（同文案同参数 → 同一场景）', (() => {
+  const a = FS.s2dPick.pickScene('下雨的夜晚', 5);
+  const b = FS.s2dPick.pickScene('下雨的夜晚', 5);
+  return a === b;
+})());
+
+// --- 3D 场景扩充 ---
+ok('3D 地点从 8 个扩到 14 个', FS.world.PLACES.length === 14,
+  '(' + FS.world.PLACES.length + ' 个：' + FS.world.PLACES.map((x) => x.name).join('、') + ')');
+ok('新增的 6 个 3D 场景都在库里',
+  ['bedroom', 'market', 'metro', 'campus', 'rainstreet', 'balcony'].every((id) => !!FS.world.placeById(id)));
+ok('14 个 3D 地点都能建出几何 + 灯光 + 天空 + 雾', (() => {
+  const bad = [];
+  FS.world.placeIds().forEach((id) => {
+    try {
+      const b = FS.world.buildPlace(id, FS.director.mkRng(FS.director.fnv(id) ^ 0x9e37).f);
+      if (!(b.solid.idx.length / 3 > 200)) bad.push(id + ' 三角面过少');
+      if (!b.lights.length || !b.sky || !b.fog) bad.push(id + ' 灯光/天空/雾缺失');
+    } catch (e) { bad.push(id + ': ' + e.message); }
+  });
+  return bad.length === 0;
+})(), '');
+ok('导演层认识全部 14 个地点（站位/关联/词典）', (() => {
+  const miss = FS.world.placeIds().filter((id) =>
+    !FS.director.SPOTS[id] || !FS.director.RELATED[id] || !FS.director.PLACE_WORDS[id]);
+  return miss.length === 0;
+})(), '');
+// ⚠️ 回归：加地点却忘加 HABITAT → reconcile 把地点顶回 hab[0]，新场景永远选不中
+ok('每个角色都至少能待在一个已建场景里（reconcile 不会把地点顶掉）', (() => {
+  const r = FS.director.mkRng(1);
+  const bad = [];
+  Object.keys(FS.director.HABITAT).forEach((cid) => {
+    FS.director.HABITAT[cid].forEach((pid) => {
+      if (!FS.world.placeById(pid)) bad.push(cid + ' 的栖息地 ' + pid + ' 不存在');
+    });
+    // 随便找个场景试 reconcile，地点不能被换掉
+    const fix = FS.director.reconcile(cid, FS.world.placeIds()[3], r);
+    if (!FS.world.placeById(fix.place)) bad.push(cid + ' reconcile 到了不存在的地点');
+  });
+  return bad.length === 0;
+})(), '');
+ok('新增场景能被文案命中（卧室/菜市场/校园/雨夜/阳台）', (() => {
+  const cases = [['卧室里的清晨', 'bedroom'], ['讨价还价的菜市场', 'market'],
+                 ['同学在操场跑步', 'campus'], ['下雨撑伞走在街头', 'rainstreet'],
+                 ['阳台上晒太阳', 'balcony'], ['地铁通勤站台', 'metro']];
+  const bad = [];
+  cases.forEach(([text, want]) => {
+    const got = FS.director.build({ title: text, scenes: [{ title: text, text }], seed: 7 }).place;
+    if (got !== want) bad.push(text + '→' + got + '(期望 ' + want + ')');
+  });
+  return bad.length === 0;
+})(), '');
+ok('室内判定包含新增的室内场景（卧室/地铁）',
+  FS.director.placeIndoor('bedroom') && FS.director.placeIndoor('metro') &&
+  !FS.director.placeIndoor('campus') && !FS.director.placeIndoor('balcony'));
+
+// --- daily 母题接进 story ---
+ok('2D 母题列表含 daily（生活场景）', FS.templates.indexOf('daily') >= 0, '(' + FS.templates.join(', ') + ')');
+ok('daily 母题走完整 drawFrame 链路不抛异常', (() => {
+  const st = { title: '测试', template: 'daily', palette: 'ink', bpm: 84, beats: 8,
+    scenes: [{ title: 'a', text: '街边的早晨' }, { title: 'b', text: '雨夜' }],
+    scenes2d: ['street', 'rainy'] };
+  const tl = FS.story.timeline(st);
+  for (let i = 0; i < 40; i++) {
+    try { FS.story.drawFrame(s2dCtx(), st, i * 0.2); }
+    catch (e) { return false; }
+  }
+  return true;
+})());
 FS.renderScore(FS.parseScore(JSON.stringify(filmMusic.score)), { sampleRate: 22050 }).then(
   () => ok('工厂出的曲子能离线渲染出音频', true),
   (e) => ok('工厂出的曲子能离线渲染出音频', false, e.message.slice(0, 60))

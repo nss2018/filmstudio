@@ -706,8 +706,9 @@
     try { ctx(); } catch (e) { hint($('f-status'), '✗ ' + e.message, 'bad'); return; }
     var c = ctx();
     filmStop();
-    // 配音先合成好（有缓存就是秒回），再起播——预览时人声按时间轴精确排程
-    buildNarrPlan(film, c).then(function (plan) {
+    // 配音先合成好（有缓存就是秒回），再起播——预览时人声按时间轴精确排程。
+    // 进度直接打在预览按钮上；失败兜底恢复按钮，不再无声无息。
+    buildNarrPlan(film, c, function (m) { $('f-preview').textContent = m; }).then(function (plan) {
       if (fPlaying) return;                        // 合成期间用户又点了停止/重播
       if (film.music) {
         if (!fBuf) { hint($('f-status'), '配乐还没生成，先点『只导配乐』或直接开始的按钮', 'bad'); }
@@ -724,6 +725,8 @@
       fPlaying = true;
       $('f-preview').textContent = '❚❚ 播放中';
       tickFilm();
+    })['catch'](function (e) {
+      $('f-preview').textContent = '▶ 预览播放';
     });
   }
 
@@ -780,8 +783,9 @@
       .then(function (buf) { narrCache[key] = buf; return buf; });
   }
 
-  /** 生成 [{at, buf}]：at = 该段在时间轴上的起点。按顺序合成，进度实时报状态条。 */
-  function buildNarrPlan(st, c) {
+  /** 生成 [{at, buf}]：at = 该段在时间轴上的起点。按顺序合成，
+      onProg(msg) 可选——把进度同步打到触发按钮上（状态条在页面顶部，用户盯着按钮看）。 */
+  function buildNarrPlan(st, c, onProg) {
     var voice = ($('f-voice') && $('f-voice').value) || '';
     if (!voice) return Promise.resolve([]);
     var texts = st.scenes.map(function (s) { return (s.text || '').trim(); });
@@ -790,19 +794,20 @@
     if (!need.length) return Promise.resolve([]);
     var tl = FS.story.timeline(st);
     var items = [], done = 0;
-    hint($('f-status'), '合成配音 0/' + need.length + '…');
+    function prog(msg) { hint($('f-status'), msg); if (onProg) onProg(msg); }
+    prog('⏳ 合成配音 0/' + need.length + '…');
     return need.reduce(function (chain, idx) {
       return chain.then(function () {
         return fetchNarr(texts[idx], voice, c).then(function (buf) {
           done++;
-          hint($('f-status'), '合成配音 ' + done + '/' + need.length + '…');
+          prog('⏳ 合成配音 ' + done + '/' + need.length + '…');
           items.push({ at: tl.marks[idx] ? tl.marks[idx].start : 0, buf: buf });
         });
       });
     }, Promise.resolve()).then(function () {
-      hint($('f-status'), '✓ 配音就绪（' + need.length + ' 段）');
+      prog('✓ 配音就绪（' + need.length + ' 段）');
       return items;
-    }, function (e) { hint($('f-status'), '✗ ' + e.message, 'bad'); throw e; });
+    }, function (e) { prog('✗ ' + e.message); throw e; });
   }
 
   function narrStartAt(plan, c, baseTime, dest1, dest2) {
@@ -887,7 +892,7 @@
     var track = stream.getVideoTracks()[0];
 
     // 配音先合成（进度见状态条），再渲配乐，最后一起排进录制流
-    buildNarrPlan(snap, c).then(function (plan) {
+    buildNarrPlan(snap, c, function (m) { btn.textContent = m; }).then(function (plan) {
       return filmRenderAudio().then(function (buf) { return { buf: buf, plan: plan }; });
     }).then(function (r) {
       var buf = r.buf, plan = r.plan;
@@ -906,6 +911,7 @@
         filmStop();
         narrStopAll();
         btn.disabled = false;
+        btn.textContent = '⦿ 导出视频（含配乐）';
         var blob = new Blob(chunks, { type: mime || 'video/webm' });
         FS.download(blob, (snap.title || 'film') + (mime.indexOf('mp4') >= 0 ? '.mp4' : '.webm'));
         hint($('f-status'), '✓ 导出完成（' + frames + ' 帧 @' + EXPORT_FPS + 'fps，' +
@@ -953,6 +959,7 @@
       setTimeout(step, 0);
     })['catch'](function (e) {
       btn.disabled = false;
+      btn.textContent = '⦿ 导出视频（含配乐）';
       hint($('f-status'), '✗ ' + e.message, 'bad');
     });
   });

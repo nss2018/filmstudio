@@ -330,8 +330,11 @@
   var TEMPLATES = { concept: drawConcept, formula: drawFormula, bars: drawBars, split: drawSplit, geo: drawGeo };
   FS.templates = Object.keys(TEMPLATES);
 
-  /** 画一帧。t 是全局时间（秒）。 */
+  /** 画一帧。t 是全局时间（秒）。设计坐标系 1280×720，画布更大时整体等比放大。 */
   function drawFrame(g, story, t) {
+    var cv = g.canvas;
+    var sx = cv ? cv.width / W : 1, sy = cv ? cv.height / H : 1;
+    if (sx !== 1 || sy !== 1) { g.save(); g.scale(sx, sy); }
     var tl = timeline(story);
     var total = tl.total;
     var ti = clamp01(t / total) * (tl.marks.length || 1);
@@ -375,6 +378,7 @@
     g.textAlign = 'right';
     g.fillText(t.toFixed(2) + 's / ' + total.toFixed(2) + 's', W - 14, H - 18);
     g.restore();
+    if (sx !== 1 || sy !== 1) g.restore();
   }
 
   /* ---------------- 按段落自动生成配乐 ---------------- */

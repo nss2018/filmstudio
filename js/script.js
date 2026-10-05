@@ -200,16 +200,39 @@
   }
 
   /* ---------------- LLM 通道 ---------------- */
+  /* 本站自带的 PHP 中转（ai.php）。火山方舟**明令禁止浏览器直连**——它连
+   * Access-Control-Allow-Origin 都不返回（实测 /api/v3/models 是 401 且无该头），
+   * 所以纯静态页直连必被 CORS 拦死，模型名填对了也没用。
+   * 这个预设让 Base 指向本站 ai.php，由服务器转发，Key 仍只存在浏览器本地。 */
+  var LOCAL_PROXY = 'ai.php';
   var PRESETS = [
+    { id: 'local-ark', name: '火山方舟 豆包（走本站代理 · 推荐）', base: LOCAL_PROXY,
+      model: '', via: 'ark.cn-beijing.volces.com' },
     { id: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
     { id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
     { id: 'silicon', name: '硅基流动', base: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
     { id: 'moonshot', name: 'Moonshot', base: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
-    // 火山方舟（豆包 Doubao）：/v3 结尾正好命中 callApi 里 /\/v\d+$/ 的分支，不会误补 /v1
-    { id: 'ark', name: '火山方舟 豆包', base: 'https://ark.cn-beijing.volces.com/api/v3',
-      model: 'doubao-seed-2-0-code-preview-260215' },
+    // 火山方舟直连（留给「已经挂了 Cloudflare Worker」的场合）
+    { id: 'ark', name: '火山方舟 豆包（直连 · 仅当已配代理时）', base: 'https://ark.cn-beijing.volces.com/api/v3',
+      model: '' },
     { id: 'custom', name: '自定义', base: '', model: '' }
   ];
+
+  /** Base 是不是指向本站 ai.php？是的话要改走 {host, path, payload} 那套协议。 */
+  function isProxyBase(base) {
+    return /\b(?:^|\/)ai\.php$/.test(String(base || '').trim());
+  }
+  /** 本地代理基准地址（页面可能部署在子目录，用脚本自身的 src 反推，绝不会错） */
+  function proxyUrl() {
+    var s = (document.currentScript && document.currentScript.src) ||
+      (root.document && root.document.currentScript && root.document.currentScript.src) || '';
+    if (s) { var m = s.replace(/[^/]*$/, ''); if (m) return m + LOCAL_PROXY; }
+    return LOCAL_PROXY;
+  }
+  function proxyOrigin(via) {
+    return String(via || 'ark.cn-beijing.volces.com')
+      .replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  }
 
   function PROMPT(o) {
     var mood = o.mood || '科普';
@@ -337,7 +360,45 @@
   function callApi(cfg, promptStr, parseFn) {
     if (!cfg || !(String(cfg.key || '').trim())) return Promise['reject'](new Error('先填 API Key'));
     var key = String(cfg.key).trim();            // 手机粘贴常带空格/换行，别让它们变成分离出去的废字符
-    var base = String(cfg.base || '').replace(/\/+$/, '').trim();
+    var rawBase = String(cfg.base || '').replace(/\/+$/, '').trim();
+    // ★ Base 指向本站 ai.php → 走代理协议（服务器转发，绕开浏览器 CORS）
+    if (isProxyBase(rawBase)) {
+      var ctrl0 = (root.AbortController ? new root.AbortController() : null);
+      var timer0 = setTimeout(function () { if (ctrl0) ctrl0.abort(); }, 90000);
+      return fetch(proxyUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host: proxyOrigin(cfg.via || 'ark.cn-beijing.volces.com'),
+          path: '/chat/completions',
+          key: key,
+          payload: {
+            model: cfg.model || 'doubao-seed-1-6-251015',
+            temperature: 0.9,
+            messages: [{ role: 'user', content: promptStr }]
+          }
+        }),
+        signal: ctrl0 ? ctrl0.signal : undefined
+      }).then(function (res) {
+        return res.text().then(function (txt) {
+          clearTimeout(timer0);
+          var upBase = 'https://' + proxyOrigin(cfg.via) + '/api/v3';
+          if (res.status >= 400) throw new Error(upstreamMsg(res.status, txt, upBase, cfg.model));
+          var j = null;
+          try { j = JSON.parse(txt); } catch (err) { /* 下面 extractContent 再兜一次 */ }
+          if (j && j.error) throw new Error((j.error.message || j.error.code || '上游报错'));
+          return parseFn(extractContent(txt));
+        });
+      })['catch'](function (err) {
+        clearTimeout(timer0);
+        var m = err && err.message ? err.message : String(err);
+        if (/Failed to fetch|NetworkError|Load failed|aborted/i.test(m))
+          throw new Error('连不上本站的 ai.php 代理——它跟站点一起部署在 /filmstudio/ai.php，' +
+            '先确认这个文件在（浏览器直接打开 https://' + (root.location ? root.location.host : '') + '/filmstudio/ai.php?models=1 看看返不返 JSON）');
+        throw err;
+      });
+    }
+    var base = rawBase;
     if (!base) base = 'https://api.deepseek.com/v1';
     if (!/\/v\d+$/.test(base)) base += '/v1';       // 容错：没写版本段自动补
     var ctrl = (root.AbortController ? new root.AbortController() : null);
@@ -440,11 +501,29 @@
   function listModels(cfg) {
     if (!cfg || !(String(cfg.key || '').trim())) return Promise['reject'](new Error('先填 API Key'));
     var key = String(cfg.key).trim();
-    var base = normalizeBase(cfg.base);
-    if (!base) return Promise['reject'](new Error('Base 地址还是空的'));
+    var rawBase = String(cfg.base || '').replace(/\/+$/, '').trim();
     var ctrl = (root.AbortController ? new root.AbortController() : null);
     var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 30000);
     function fin() { clearTimeout(timer); }
+    // ★ 代理模式：列模型也走服务器（这是拿到「你这个 Key 到底能调什么」的唯一可靠办法）
+    if (isProxyBase(rawBase)) {
+      var upB = 'https://' + proxyOrigin(cfg.via) + '/api/v3';
+      return fetch(proxyUrl() + '?models=1&host=' + encodeURIComponent(proxyOrigin(cfg.via)) +
+        '&key=' + encodeURIComponent(key), { signal: ctrl ? ctrl.signal : undefined })
+        .then(function (res) {
+          return res.text().then(function (txt) {
+            if (res.status >= 400) throw new Error(upstreamMsg(res.status, txt, upB, '', '/models'));
+            return parseModelList(txt);
+          });
+        })['catch'](function (err) {
+          var m = err && err.message ? err.message : String(err);
+          if (/Failed to fetch|NetworkError|Load failed|aborted/i.test(m))
+            throw new Error('连不上本站的 ai.php 代理，确认 /filmstudio/ai.php 这个文件在服务器上');
+          throw err;
+        })['finally'](fin);
+    }
+    var base = normalizeBase(rawBase);
+    if (!base) return Promise['reject'](new Error('Base 地址还是空的'));
     return fetch(base + '/models', {
       headers: { 'Authorization': 'Bearer ' + key },
       signal: ctrl ? ctrl.signal : undefined
@@ -454,7 +533,8 @@
     })['catch'](function (err) {
       var msg = err && err.message ? err.message : String(err);
       if (/Failed to fetch|NetworkError|CORS|Load failed|aborted/i.test(msg))
-        throw new Error('直连被浏览器拦了（CORS）或超时——这个服务不给跨域列模型。用 workers/proxy.js 挂个 Cloudflare Worker 当代理，Base 填那个地址再拉一次。');
+        throw new Error('直连被浏览器拦了（CORS）或超时——这个服务不给跨域列模型。' +
+          '最简单的解法：把服务商选成「火山方舟 豆包（走本站代理 · 推荐）」，Base 会变成 ai.php，由服务器转发。');
       throw err;
     })['finally'](fin);
   }
@@ -524,6 +604,7 @@
     readModelCache: readModelCache, writeModelCache: writeModelCache,
     normalizeBase: normalizeBase,
     advice: advice, PRESETS: PRESETS, MOODS: MOODS,
+    isProxyBase: isProxyBase, proxyUrl: proxyUrl, proxyOrigin: proxyOrigin, LOCAL_PROXY: LOCAL_PROXY,
     loadCfg: loadCfg, saveCfg: saveCfg,
     // 给测试用
     _rng: rng, _fnv: fnv

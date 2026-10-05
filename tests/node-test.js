@@ -87,6 +87,11 @@ ok('段落首尾相接', tl.marks[1].start === tl.marks[0].end);
 section('3. 母题绘制（stub canvas）');
 function stubCtx() {
   const noop = () => {};
+  /* save/restore 要**真**实现：以前是 noop，于是 particles/dial 把 globalAlpha 改成
+   * 「最后一个粒子的透明度」之后再也没恢复，后面所有 fillText 都读到一个被污染的 alpha。
+   * 真 canvas 上不会（人家 save/restore 是真的），但这层 noop 会让测试看不见
+   * 「运动基元忘记配对 save/restore」这类真 bug —— 在真机上表现就是整块画面发灰。 */
+  const stack = [];
   const ctx = {
     canvas: { width: 1280, height: 720 },
     calls: 0,
@@ -99,7 +104,16 @@ function stubCtx() {
     quadraticCurveTo: () => ctx.calls++, bezierCurveTo: () => ctx.calls++,
     ellipse: () => ctx.calls++, rect: () => ctx.calls++, clip: noop,
     setLineDash: noop,
-    save: noop, restore: noop, translate: noop, rotate: noop, scale: noop,
+    save: () => {
+      stack.push({ a: ctx.globalAlpha, f: ctx.font, ta: ctx.textAlign, tb: ctx.textBaseline,
+        fs: ctx.fillStyle, ss: ctx.strokeStyle, lw: ctx.lineWidth, sb: ctx.shadowBlur });
+    },
+    restore: () => {
+      const s = stack.pop(); if (!s) return;
+      ctx.globalAlpha = s.a; ctx.font = s.f; ctx.textAlign = s.ta; ctx.textBaseline = s.tb;
+      ctx.fillStyle = s.fs; ctx.strokeStyle = s.ss; ctx.lineWidth = s.lw; ctx.shadowBlur = s.sb;
+    },
+    translate: noop, rotate: noop, scale: noop,
     fillText: (t, x, y) => { if (typeof x !== 'number' || !isFinite(x)) throw new Error('fillText 的坐标不是数字: ' + t); ctx.calls++; },
     strokeText: noop,
     measureText: (t) => ({ width: String(t).length * 12 }),
@@ -549,9 +563,19 @@ ok('LLM 段落数超出文案时不会多出镜头', (() => {
 })());
 /* 接火山方舟豆包（Doubao-Seed-2.0-Code）后加的：预设 + URL 拼装 + 新地点白名单 */
 ok('服务商预设里有火山方舟豆包', (() => {
+  // 2026-10-05：不再预设具体模型名（方舟按账号授权，预设一个多半没开通的模型
+  // 就会一直 401）。改成模型留空 + 靠「拉已开通模型」自动填。
   const p = FS.script.PRESETS.filter((x) => x.id === 'ark')[0];
-  return !!(p && p.base === 'https://ark.cn-beijing.volces.com/api/v3' &&
-    p.model === 'doubao-seed-2-0-code-preview-260215');
+  return !!(p && p.base === 'https://ark.cn-beijing.volces.com/api/v3' && p.model === '');
+})());
+ok('方舟「走本站代理」预设排在第一位（直连必被 CORS 拦）', (() => {
+  const f = FS.script.PRESETS.filter((x) => x.id === 'local-ark')[0];
+  return !!f && f.base === 'ai.php' && f.via === 'ark.cn-beijing.volces.com' &&
+    FS.script.PRESETS[0].id === 'local-ark';
+})());
+ok('isProxyBase 认得 ai.php、认不得普通地址', (() => {
+  const f = FS.script.isProxyBase;
+  return f('ai.php') && f('/filmstudio/ai.php') && !f('https://api.deepseek.com/v1') && !f('');
 })());
 ok('火山方舟 base 不会被误补 /v1（结尾是 /v3 就该原样用）', (() => {
   const p = FS.script.PRESETS.filter((x) => x.id === 'ark')[0];
@@ -1160,7 +1184,7 @@ const listMsg = function (cfg) {
   stub({ status: 500 });
   ok('500 报上游拒绝', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('上游报错') === 6);
   stub(null);
-  ok('CORS 被拦时给办法不是堆栈', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('proxy.js') > 0);
+  ok('CORS 被拦时给办法不是堆栈', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('ai.php') > 0);
   stub({ status: 200, body: JSON.stringify({ data: [{ id: 'a' }, { id: 'b' }] }) });
   const got = await FS.script.listModels({ base: 'https://x/v1', key: 'sk-x' });
   ok('正常返回模型清单', Array.isArray(got) && got.length === 2 && got[0].id === 'a');
@@ -1263,6 +1287,126 @@ const listMsg = function (cfg) {
     new Set(picked).size >= 4, '(' + picked.join('→') + ')');
   ok('自动选景：解析不出地点时不会退化成全 cafe',
     picked.every((id) => typeof id === 'string' && id.length > 0));
+
+  section('\n18. 三处「画面元素互相压」的几何回归（标题 / 字幕 / 图形）');
+  /* 这一节要真量文字矩形，所以 measureText 必须跟字号挂钩——stubCtx 那个固定 12px/字
+   * 量不出「长公式顶出画面」这类问题。中文按 1em、拉丁按 0.55em 近似（够判定越界）。 */
+  function geomCtx() {
+    const g = stubCtx();
+    g.texts = []; g.rects = []; g.arcs = [];
+    const pxOf = () => parseFloat((/(\d+(?:\.\d+)?)px/.exec(g.font || '16px') || [0, 16])[1]) || 16;
+    g.measureText = (t) => {
+      const px = pxOf();
+      let w = 0;
+      for (const ch of String(t)) w += /[\u2e80-\u9fff\uff00-\uffef]/.test(ch) ? px : px * 0.55;
+      return { width: w };
+    };
+    g.fillText = (t, x, y) => {
+      const px = pxOf(), w = g.measureText(t).width;
+      let l = x;
+      if (g.textAlign === 'center') l = x - w / 2;
+      else if (g.textAlign === 'right') l = x - w;
+      const mid = g.textBaseline === 'middle';
+      g.texts.push({
+        t: String(t), l, r: l + w, px, y, a: g.globalAlpha,
+        top: mid ? y - px / 2 : y - px * 0.8,
+        bot: mid ? y + px / 2 : y + px * 0.2
+      });
+      g.calls++;
+    };
+    g.fillRect = (x, y, w, h) => { g.rects.push({ x, y, w, h }); g.calls++; };
+    g.arc = (x, y, r) => { g.arcs.push({ x, y, r }); g.calls++; };
+    return g;
+  }
+  const CW = 1280, CH = 720;
+  const visText = (arr) => arr.filter((h) => h.a > 0.12 && h.t.trim() !== '');
+  const minOf = (arr, f) => Math.min.apply(null, arr.map(f));
+  const maxOf = (arr, f) => Math.max.apply(null, arr.map(f));
+
+  // ① 对比模板：底部字幕原来骑在色板底边上（色板底 610 / 字幕上沿 599，两行时 579）
+  (function () {
+    const st = {
+      title: 'x', template: 'split', palette: 'ink', bpm: 84, beats: 8, sub: 'on',
+      scenes: [
+        { title: '深圳 比 北京', text: '一天里能走完的距离差得不是一点半点' },
+        { title: '第二步换角度', text: '换个角度再试一次就好' }
+      ]
+    };
+    const tl = FS.story.timeline(st);
+    let subTop = Infinity, bandBot = -Infinity, seen = false;
+    for (const f of [0.4, 0.7, 0.999]) {
+      const g = geomCtx();
+      FS.story.drawFrame(g, st, tl.marks[0].dur * f);
+      const bands = g.rects.filter((r) => Math.abs(r.y - 190) < 0.5 && r.h > 100);   // 左右两块色板
+      if (!bands.length) continue;
+      bandBot = Math.max(bandBot, maxOf(bands, (r) => r.y + r.h));
+      const subs = visText(g.texts).filter((h) => h.y > 500);                        // 字幕（栏内大字在 385）
+      if (subs.length) { subTop = Math.min(subTop, minOf(subs, (h) => h.top)); seen = true; }
+    }
+    ok('对比模板：底部字幕落在色板下方，不再被色板压住',
+      seen && subTop > bandBot,
+      '(字幕最高 ' + subTop.toFixed(0) + ' > 色板底 ' + bandBot.toFixed(0) + ')');
+  })();
+
+  // ② 几何演化：多边形是旋转的，原来 R 长到 280 → 顶点最高 y=80 扎进标题带（63~105）
+  (function () {
+    const st = {
+      title: 'x', template: 'geo', palette: 'ink', bpm: 84, beats: 8, sub: 'on',
+      scenes: [
+        { title: '对称群', text: '正六边形的六个顶点两两连线构成完整的对称结构' },
+        { title: '第二步', text: '换个角度再试一次' },
+        { title: '第三步', text: '对比度决定最终效果' },
+        { title: '收尾', text: '就到这里' }
+      ]
+    };
+    const tl = FS.story.timeline(st);
+    let topMin = Infinity, titleBot = -Infinity, verts = 0;
+    for (let k = 0; k <= 24; k++) {
+      const g = geomCtx();
+      FS.story.drawFrame(g, st, tl.total * (0.02 + 0.96 * k / 24));
+      const v = g.arcs.filter((a) => Math.abs(a.r - 7) < 0.01);     // 顶点标记固定 r=7
+      if (v.length) { topMin = Math.min(topMin, minOf(v, (a) => a.y)); verts += v.length; }
+      const ttl = visText(g.texts).filter((h) => h.y < 130 && h.px >= 36);
+      if (ttl.length) titleBot = Math.max(titleBot, ttl[0].bot);
+    }
+    ok('几何演化：旋转的多边形顶点扫不到上方标题（R 上限收到 210）',
+      verts > 0 && topMin > titleBot,
+      '(顶点最高 ' + topMin.toFixed(0) + ' vs 标题底 ' + titleBot.toFixed(0) + '，' + verts + ' 个顶点样本)');
+  })();
+
+  // ③ 公式母题：夹中文的长公式按 64px 会横着顶出 1280 的画面
+  (function () {
+    function span(expr) {
+      const st = {
+        title: 'x', template: 'formula', palette: 'ink', bpm: 84, beats: 8, sub: 'on',
+        scenes: [{ title: expr, text: '一句说明。' }, { title: 'b', text: 'x' }]
+      };
+      const tl = FS.story.timeline(st);
+      const g = geomCtx();
+      // ⚠️ 别用 0.999：段末是交叉淡出帧，globalAlpha 已经归零，会被 a>0.12 全部滤掉
+      FS.story.drawFrame(g, st, tl.marks[0].dur * 0.5);
+      const body = visText(g.texts).filter((h) => h.y > 300 && h.y < 420);   // 居中那行公式（字幕在 532）
+      if (!body.length) return null;
+      return { l: minOf(body, (h) => h.l), r: maxOf(body, (h) => h.r), px: body[0].px };
+    }
+    const sh = span('E = mc²');
+    const lg = span('能量等于质量乘以光速的平方这是一个很长的公式名字');
+    ok('公式母题：短公式保持 64px', !!sh && sh.px === 64, sh ? '(' + sh.px + 'px)' : '量不到');
+    ok('公式母题：长公式自动缩字号且不出画',
+      !!lg && lg.px < 64 && lg.l > 60 && lg.r < CW - 60,
+      lg ? '(' + lg.px.toFixed(0) + 'px, x[' + lg.l.toFixed(0) + '..' + lg.r.toFixed(0) + '])' : '量不到');
+  })();
+
+  // ④ 页面下拉必须真的能选到「走本站代理」——否则 ai.php 那条通路在 UI 上根本进不去
+  (function () {
+    const html = require('fs').readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+    const m = /<select id="sw-preset">([\s\S]*?)<\/select>/.exec(html);
+    const opts = m ? (m[1].match(/value="([^"]+)"/g) || []).map((s) => s.slice(7, -1)) : [];
+    ok('API 设置的下拉里能选到「走本站代理」预设', opts.indexOf('local-ark') >= 0,
+      '(' + opts.join(',') + ')');
+    ok('代理预设排在下拉第一位（开箱默认就是它）', opts[0] === 'local-ark');
+    ok('API 设置区写明了 ai.php 中转这回事', /ai\.php/.test(html));
+  })();
 
   section('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败');
     process.exit(fail ? 1 : 0);

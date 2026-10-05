@@ -21,6 +21,138 @@
   function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
   function ease(x) { return 1 - Math.pow(1 - clamp01(x), 3); }         // easeOutCubic
   function smooth(x) { x = clamp01(x); return x * x * (3 - 2 * x); }
+  function lerp(a, b, x) { return a + (b - a) * clamp01(x); }
+
+  /* ==================================================================
+   *  运动基元（2026-10-05）
+   *  为什么要这一层：原来六个母题的画面变化只有 2%~5%（实测 concept 2.2%、
+   *  formula 1.9%、bars 2.8%、split 4.9%、geo 3.0%、daily 2.0%），
+   *  肉眼看过去就是「只有文字，没有动画」——因为每段里真正在动的只有
+   *  几十像素的位移和透明度，构图完全不变。
+   *  这里把「动」拆成可复用的零件，让每个母题都有**贯穿整段的连续运动**：
+   *  入场、循环、收场三层叠在一起，保证任意时刻画面里都有东西在变。
+   * ================================================================== */
+
+  /** 弹性出场：overshoot 一下再落回，比线性/缓动有生气得多。
+   *  x=0 → 0，x=1 → 1，中途会冲过 1 再回落。 */
+  function back(x, s) {
+    x = clamp01(x);
+    s = s === undefined ? 1.7 : s;
+    var u = x - 1;
+    return 1 + (s + 1) * u * u * u + s * u * u;
+  }
+
+  /** 段内归一化时间：把全局 t 折成「这一段里走了多少」，
+   *  再补一个 loop 次数，让同一个动作能在段内反复播。 */
+  function seg(t, p, cycles) {
+    return { t: t, p: p, loop: (p * (cycles || 1)) % 1, ping: 1 - Math.abs(((p * (cycles || 1)) % 2) - 1) };
+  }
+
+  /** 持续旋转（弧度）——给几何图形用，保证整段都在转 */
+  function spin(t, rpm) { return t * (rpm || 6) * Math.PI / 30; }
+
+  /** 描边生长：返回一个 0..1 的比例，配 ctx.setLineDash([len*ratio, len]) 用。
+   *  ctx 需支持 setLineDash（node 的 stub 和真 canvas 都支持）。 */
+  function drawGrowth(g, pathFn, ratio) {
+    var len = 2000;                                  // 估个够大的周长
+    if (g.setLineDash) g.setLineDash([len * clamp01(ratio), len * 2]);
+    pathFn();
+    g.stroke();
+    if (g.setLineDash) g.setLineDash([]);
+  }
+
+  /** 粒子群：N 个粒子在各自相位上沿一个方向循环飘，带尾迹。
+   *  这是让画面「一直在动」最省力的手段——比单个元素持续位移活跃得多。 */
+  function particles(g, o) {
+    var n = o.n || 26, sp = o.speed || 0.06, t = o.t || 0;
+    var col = o.color || '#ffffff';
+    var box = o.box || { x: 0, y: 0, w: W, h: H };
+    var seed = o.seed || 1;
+    g.save();
+    for (var i = 0; i < n; i++) {
+      var ph = ((i * 2654435761 % 1000) / 1000 + seed * 0.137) % 1;
+      var life = (t * sp + ph) % 1;
+      var x = box.x + ((i * 97 + seed * 31) % 100) / 100 * box.w + Math.sin(t * 0.7 + i) * 26;
+      var y = box.y + box.h - life * box.h;                 // 自下而上飘
+      var r = (o.r || 2.4) * (0.5 + 0.9 * Math.sin(i * 1.7 + t));
+      var a = (o.alpha || 0.5) * Math.sin(life * Math.PI);   // 两头淡入淡出
+      if (a <= 0.01) continue;
+      g.globalAlpha = a;
+      g.fillStyle = col;
+      g.beginPath();
+      g.arc(x, y, Math.max(0.4, r), 0, Math.PI * 2);
+      g.fill();
+    }
+    g.restore();
+  }
+
+  /** 沿路径走的一个「主体」（图标/光点），带运动残影。
+   *  这是让画面有「叙事感」的关键——一个可见的东西在画面里移动。 */
+  function runner(g, o) {
+    var p = clamp01(o.p);
+    var x = lerp(o.x0, o.x1, p);
+    var y = lerp(o.y0, o.y1, p) + Math.sin(p * Math.PI * 2 * (o.bob || 1)) * (o.bobAmp || 0);
+    var r = o.r || 12;
+    // 残影：往回取 3 个点，透明度递减
+    for (var k = 3; k >= 1; k--) {
+      var pk = clamp01(p - k * 0.028);
+      var xk = lerp(o.x0, o.x1, pk);
+      var yk = lerp(o.y0, o.y1, pk) + Math.sin(pk * Math.PI * 2 * (o.bob || 1)) * (o.bobAmp || 0);
+      g.globalAlpha = (o.alpha || 1) * 0.13 * (4 - k) / 3;
+      g.fillStyle = o.color || '#fff';
+      g.beginPath();
+      g.arc(xk, yk, r * (1 - k * 0.13), 0, Math.PI * 2);
+      g.fill();
+    }
+    g.globalAlpha = o.alpha || 1;
+    g.fillStyle = o.color || '#fff';
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+    if (o.glow) {
+      var gg = g.createRadialGradient(x, y, 0, x, y, r * 4.2);
+      gg.addColorStop(0, hexA(o.color || '#ffffff', 0.5));
+      gg.addColorStop(1, hexA(o.color || '#ffffff', 0));
+      g.fillStyle = gg;
+      g.beginPath();
+      g.arc(x, y, r * 4.2, 0, Math.PI * 2);
+      g.fill();
+    }
+    return { x: x, y: y };
+  }
+
+  /** 环形进度/仪表：整段持续转的虚线环 + 一个随 p 走的高亮弧 */
+  function dial(g, o) {
+    var cx = o.x, cy = o.y, R = o.r, t = o.t, p = clamp01(o.p);
+    g.save();
+    g.lineCap = 'round';
+    // 底盘：整段持续缓慢转，读得出「还在动」
+    g.save();
+    g.translate(cx, cy); g.rotate(spin(t, o.rpm || 8));
+    g.strokeStyle = o.dim || hexA(o.color || '#fff', 0.18);
+    g.lineWidth = o.lw || 2;
+    for (var k = 0; k < 36; k++) {
+      var a0 = k * Math.PI * 2 / 36;
+      var len = (k % 3 === 0) ? 0.13 : 0.07;           // 长短刻度交错，转起来有节奏
+      g.beginPath();
+      g.arc(0, 0, R, a0, a0 + len);
+      g.stroke();
+    }
+    g.restore();
+    // 进度弧：随 p 生长，带发光
+    g.save();
+    g.translate(cx, cy); g.rotate(-Math.PI / 2 + spin(t, 3));
+    g.strokeStyle = o.color || '#fff';
+    g.lineWidth = (o.lw || 2) + 2.5;
+    g.shadowColor = hexA(o.color || '#fff', 0.6);
+    g.shadowBlur = 16;
+    g.beginPath();
+    g.arc(0, 0, R, 0, Math.PI * 2 * p);
+    g.stroke();
+    g.restore();
+    g.restore();
+  }
+
 
   /** 段落时间轴：[{start, end, i, dur}] */
   function timeline(story) {
@@ -100,21 +232,74 @@
   }
 
   /* ---------------- 母题 1：概念递进 ---------------- */
+  /* 重做（2026-10-05）：原来整段画面只变化 2.2%，实际就是「一个标题浮在暗底上」，
+     同心圆淡到看不见 → 用户反馈「只有文字没有动画」。
+     现在按四层运动叠：① 背景粒子持续飘 ② 环形仪表整段自转 + 进度弧生长
+     ③ 三个光点各走一条轨道（错相位，构图一直不对称地动）
+     ④ 标题弹性入场 + 下划线写出 + 两侧卡片滑入把版面撑满 */
   function drawConcept(g, story, sc, p, t, alpha) {
     var c = pal(story.palette);
-    var cx = W / 2, cy = H / 2;
+    var cx = W / 2, cy = H / 2 - 34;
 
-    // 同心圆，随段内进度扩散
+    // ① 背景粒子：整段持续飘，密度随段内进度增加
+    particles(g, {
+      t: t, n: 26 + Math.floor(p * 34), speed: 0.055, seed: sc.i + 1,
+      color: c.main, r: 3.0, alpha: 0.40 * alpha,
+      box: { x: 40, y: 50, w: W - 80, h: H - 170 }
+    });
+
+    // ② 环形仪表：底盘刻度整段缓慢转（这是「一直在动」的主要来源）
+    dial(g, { x: cx, y: cy, r: 196 + Math.sin(t * 0.9) * 14, t: t, p: p,
+      color: c.main, dim: hexA(c.main, 0.22), lw: 2, rpm: 14 });
+
+    // ③ 三个光点各走一条轨道，相位错开（构图一直不对称地动）
+    var o1 = seg(t, p, 1.0);
+    runner(g, { p: o1.ping, x0: cx - 400, y0: cy + 118, x1: cx + 400, y1: cy - 118,
+      r: 10, color: c.alt, alpha: alpha, glow: 1, bob: 2, bobAmp: 30 });
+    var o2 = seg(t, p + 0.34, 1.0);
+    runner(g, { p: o2.ping, x0: cx + 400, y0: cy + 96, x1: cx - 400, y1: cy - 150,
+      r: 7, color: c.main, alpha: alpha * 0.85, glow: 1, bob: 3, bobAmp: 24 });
+    var o3 = seg(t, p + 0.67, 1.0);
+    runner(g, { p: o3.ping, x0: cx - 330, y0: cy - 150, x1: cx + 360, y1: cy + 150,
+      r: 5.5, color: c.alt, alpha: alpha * 0.7, glow: 0, bob: 1, bobAmp: 40 });
+
+    // 同心圆：中心一圈圈「弹出」（back 弹性），不再是整体缓慢扩散
     g.save();
-    g.globalAlpha = alpha * 0.5;
-    g.strokeStyle = hexA(c.main, 0.35);
-    g.lineWidth = 1.5;
-    for (var k = 0; k < 5; k++) {
-      var rr = 120 + k * 78 + p * 60;
+    for (var k = 0; k < 4; k++) {
+      var kp = clamp01((p - k * 0.16) / 0.5);          // 每圈错开 16% 依次弹出
+      if (kp <= 0) continue;
+      var rr = 96 + k * 74;
+      g.globalAlpha = alpha * (1 - kp * 0.7) * 0.85;
+      g.strokeStyle = k === 0 ? c.alt : c.main;
+      g.lineWidth = k === 0 ? 2.4 : 1.5;
+      g.shadowColor = hexA(k === 0 ? c.alt : c.main, 0.5);
+      g.shadowBlur = 12 * (1 - kp);
       g.beginPath();
-      g.arc(cx, cy, rr, 0, Math.PI * 2);
+      g.arc(cx, cy, rr * back(kp, 0.9), 0, Math.PI * 2);
       g.stroke();
     }
+    g.restore();
+
+    // ④ 左右两张「卡片」从两侧滑入 —— 把空荡的版面撑住，构图不再只有中间一块
+    g.save();
+    var cardIn = back(clamp01((p - 0.1) / 0.34), 1.2);
+    var cardW = 232, cardH = 132, cardY = cy + 176;
+    [[cx - 372 - (1 - cardIn) * 420, c.main, '概念'],
+     [cx + 372 + (1 - cardIn) * 420, c.alt, '要点']].forEach(function (c2, ci) {
+      if (cardIn <= 0.01) return;
+      g.globalAlpha = alpha * Math.min(1, cardIn) * 0.9;
+      g.fillStyle = hexA(c2[1], 0.10);
+      g.strokeStyle = hexA(c2[1], 0.45);
+      g.lineWidth = 1.5;
+      g.beginPath();
+      if (g.roundRect) g.roundRect(c2[0] - cardW / 2, cardY - cardH / 2, cardW, cardH, 10);
+      else g.rect(c2[0] - cardW / 2, cardY - cardH / 2, cardW, cardH);
+      g.fill(); g.stroke();
+      g.fillStyle = hexA(c2[1], 0.95);
+      g.font = font(20, 600);
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(ci === 0 ? '概念' : String(sc.i + 1) + ' / ' + story.scenes.length, c2[0], cardY);
+    });
     g.restore();
 
     g.save();
@@ -122,19 +307,30 @@
     g.textAlign = 'center';
     g.textBaseline = 'middle';
 
-    var rise = (1 - ease(p * 2.2)) * 34;              // 从下方浮上来
-    var fade = smooth(p * 6) * smooth((1 - p) * 8);   // 段内淡入淡出
-
+    // 标题：弹性入场（原来只是匀速上浮 34px，看着不动）
+    var inP = back(clamp01(p / 0.28), 1.9);
+    var rise = (1 - inP) * 92;
     var title = sc.title || '';
+    g.save();
+    g.translate(cx, cy - 26 + rise);
+    g.scale(lerp(0.86, 1, inP), lerp(0.86, 1, inP));      // 轻微缩放配合弹性
     g.font = font(88, 700);
     g.fillStyle = c.main;
-    g.shadowColor = hexA(c.main, .5); g.shadowBlur = 30;
-    g.fillText(title, cx, cy - 26 + rise);
+    g.shadowColor = hexA(c.main, .55); g.shadowBlur = 34;
+    g.fillText(title, 0, 0);
     g.shadowBlur = 0;
+    // 标题下划线：从左往右「写」出来
+    var tw = Math.min(560, Math.max(120, title.length * 92));
+    g.globalAlpha = alpha * clamp01((p - 0.22) / 0.3);
+    g.fillStyle = c.alt;
+    g.fillRect(-tw / 2, 62, tw * clamp01((p - 0.22) / 0.3), 4);
+    g.restore();
 
     if (sc.text) {
-      g.globalAlpha = alpha * fade;      // sub() 只管字和位置，透明度留给调用方
-      sub(g, story, sc, cx, cy + 92, W - 260, 30, 400);
+      g.globalAlpha = alpha * smooth(p * 5) * smooth((1 - p) * 7);
+      // 字幕挪到卡片上方那条带子里，不再被圆环压住；
+      // y 从 cy+262 收到 cy+236，给底部片名题头（H-34≈686）让出安全距离。
+      sub(g, story, sc, cx, cy + 236, W - 300, 29, 500);
     }
 
     // 段落序号
@@ -158,6 +354,12 @@
     g.textAlign = 'center';
     g.textBaseline = 'middle';
 
+    // 运动层（2026-10-05）：原来整段只变化 1.9%，逐字揭示之外画面几乎不动
+    particles(g, { t: t, n: 20 + Math.floor(p * 22), speed: 0.045, seed: sc.i + 7,
+      color: c.main, r: 2.6, alpha: 0.30 * alpha, box: { x: 60, y: 70, w: W - 120, h: H - 190 } });
+    dial(g, { x: 124, y: H - 164, r: 60, t: t, p: p, color: c.alt,
+      dim: hexA(c.alt, 0.22), lw: 1.6, rpm: 26 });
+
     // 逐字揭示：先量每个字符宽 -> 算总宽 -> 从 cx-totalW/2 起排开，否则全叠在中心
     g.font = font(64, 600);
     var chars = Array.from(expr);
@@ -168,27 +370,41 @@
       widths.push(wch);
       totalW += wch;
     }
+    // 宽度兜底（2026-10-05）：公式里常夹中文（如「E = mc² 的秘密」），按 64px 量总宽会
+    // 顶出 1280 的画面，两头的字符直接出画。超了就整体按比例缩字号（下限 30px）再重量一次。
+    var exprPx = 64;
+    if (totalW > W - 150) {
+      exprPx = Math.max(30, 64 * (W - 150) / totalW);
+      g.font = font(exprPx, 600);
+      widths = []; totalW = 0;
+      for (i = 0; i < chars.length; i++) {
+        var w2 = g.measureText(chars[i]).width;
+        widths.push(w2); totalW += w2;
+      }
+    }
     var x = cx - totalW / 2;
     for (i = 0; i < chars.length; i++) {
       var ch = chars[i];
       var on = i < revealed;
-      g.font = font(64, on ? 600 : 400);
+      g.font = font(exprPx, on ? 600 : 400);
       g.fillStyle = on ? c.main : hexA(c.dim, .3);
       if (ch !== ' ') g.fillText(ch, x + widths[i] / 2, cy);
       x += widths[i];
     }
 
-    // 高亮光标（跟着揭示进度走）
+    // 高亮光标（跟着揭示进度走，高度跟着缩过的字号走）
     if (revealed < chars.length) {
       var caret = 0;
       for (i = 0; i < revealed; i++) caret += widths[i];
       g.fillStyle = hexA(c.main, .8 * (0.4 + 0.6 * Math.abs(Math.sin(t * 6))));
-      g.fillRect(cx - totalW / 2 + caret + 2, cy - 30, 3, 60);
+      g.fillRect(cx - totalW / 2 + caret + 2, cy - exprPx * 0.47, 3, exprPx * 0.94);
     }
 
     if (note) {
-      g.globalAlpha = alpha * smooth((p - .35) * 4);
-      sub(g, story, sc, cx, cy + 118, W - 300, 28, 400);
+      // ⚠️ 原来 y=cy+118，字幕两行时上沿正好压住还在逐字揭示的字符（截图里糊成一团）。
+      // 下移到 cy+172，并要求逐字揭示过半才淡入。
+      g.globalAlpha = alpha * smooth((p - .45) * 4);
+      sub(g, story, sc, cx, cy + 172, W - 300, 28, 400);
     }
     g.restore();
   }
@@ -200,6 +416,10 @@
     var gap = 46, bw = (W - 200 - gap * (n - 1)) / n;
     var baseY = H - 210;
     var maxH = 380;
+
+    // 运动层（2026-10-05）：原来 2.8%，柱子长完就静止了
+    particles(g, { t: t, n: 18 + Math.floor(p * 20), speed: 0.05, seed: sc.i + 3,
+      color: c.main, r: 2.4, alpha: 0.28 * alpha, box: { x: 80, y: 120, w: W - 160, h: H - 300 } });
 
     g.save();
     g.globalAlpha = alpha;
@@ -277,10 +497,20 @@
     g.save();
     g.globalAlpha = alpha;
 
+    // 运动层（2026-10-05）：原来 4.9%，就是一块色板宽度在变
+    particles(g, { t: t, n: 20 + Math.floor(p * 22), speed: 0.05, seed: sc.i + 5,
+      color: two ? c.alt : c.main, r: 2.6, alpha: 0.28 * alpha,
+      box: { x: 60, y: 90, w: W - 120, h: H - 220 } });
+
     var cx = W / 2;
-    var wLeft = two ? cx * ease(p) : W * ease(p);
+    // 分屏缝用弹性推进（原来 ease 太软，看着像没动）
+    var wLeft = two ? cx * back(clamp01(p / 0.62), 0.55) : W * back(clamp01(p / 0.7), 0.4);
     var wRight = W - wLeft;
-    var y0 = 190, h0 = H - 300;
+    // ⚠️ 2026-10-05 修「字幕被色板盖住」：色板原来 h0 = H-300 → 底边落在 y=610，
+    //    而字幕基线在 H-108 = 612（两行时上沿 579.5）→ 字幕正好骑在色板底边上，
+    //    一半在色块里一半在外。色板收 60px（底边 580），字幕再下移 24px（H-84 = 636），
+    //    两行时上沿 603.5，与色板之间留出 23px 净空。
+    var y0 = 190, h0 = H - 330;
 
     g.fillStyle = hexA(c.main, .16);
     g.fillRect(0, y0, wLeft, h0);
@@ -310,12 +540,18 @@
     }
 
     if (raw) {
-      g.fillStyle = c.text; g.font = font(46, 600);
-      g.fillText(raw, W / 2, 110);
+      // ⚠️ 原来画在 y=110，色板从 y=190 起、上边缘还会被描边加粗 → 标题压在色板上糊成一团。
+      // 改成画在色板**上方**的独立一行，并加一条分隔线，层次也清楚了。
+      g.fillStyle = c.text; g.font = font(42, 600);
+      g.fillText(raw, W / 2, 104);
+      g.globalAlpha = alpha * 0.4;
+      g.strokeStyle = hexA(c.main, 0.5);
+      g.lineWidth = 1;
+      g.beginPath(); g.moveTo(W / 2 - 90, 140); g.lineTo(W / 2 + 90, 140); g.stroke();
     }
 
     g.globalAlpha = alpha * smooth((p - .3) * 3.5);
-    sub(g, story, sc, W / 2, H - 108, W - 300, 26, 400);
+    sub(g, story, sc, W / 2, H - 84, W - 300, 26, 400);
     g.restore();
   }
 
@@ -325,14 +561,30 @@
     var cx = W / 2, cy = H / 2;
     var n = story.scenes.length + 2;
     var grow = ease(p);
-    var R = 130 + 150 * grow;
+    // ⚠️ 2026-10-05 修「标题被多边形扫到」：原来 R 长到 280，多边形是**旋转**的，
+    //    转到有顶点朝正上方时最高点 y = cy - R = 360 - 280 = 80，
+    //    正好扎进标题带（63~105）和分隔线（118）——肉眼就是「标题压到多边形」。
+    //    改后 R 上限 210：最高点最多到 150（离分隔线还有 32px），
+    //    最低点最多到 570（字幕两行时上沿 594，留 24px）。
+    var R = 110 + 100 * grow;
+
+    // 运动层（2026-10-05）：原来 3.0%，只是整体缓慢放大
+    particles(g, { t: t, n: 22 + Math.floor(p * 24), speed: 0.05, seed: sc.i + 11,
+      color: c.alt, r: 2.6, alpha: 0.3 * alpha, box: { x: 70, y: 80, w: W - 140, h: H - 200 } });
+    dial(g, { x: cx, y: cy, r: 108, t: t, p: p, color: c.alt,
+      dim: hexA(c.alt, 0.2), lw: 1.6, rpm: 30 });
 
     g.save();
     g.globalAlpha = alpha;
     g.strokeStyle = hexA(c.main, .25);
     g.lineWidth = 1;
     for (var ring = 1; ring <= 3; ring++) {
-      g.beginPath(); g.arc(cx, cy, R * (1 + ring * .45), 0, Math.PI * 2); g.stroke();
+      // 每层环反向自转、速度不同 → 整段一直有相对运动
+      g.save();
+      g.translate(cx, cy);
+      g.rotate(spin(t, (ring % 2 ? 9 : -7) * (ring + 1)));
+      g.beginPath(); g.arc(0, 0, R * (1 + ring * .45), 0, Math.PI * 2); g.stroke();
+      g.restore();
     }
 
     var rot = t * 0.35;
@@ -355,11 +607,18 @@
     }
 
     g.textAlign = 'center'; g.textBaseline = 'middle';
+    // ⚠️ 原来标题画在 cy-R-70：R 随生长到 280，y 会顶到 10（贴边/出画），
+    // 而且多边形是**旋转**的，顶点会扫过标题。改成固定在画面上方一条带子里。
     g.fillStyle = c.text;
-    g.font = font(52, 700);
-    g.fillText(sc.title || '', cx, cy - R - 70);
+    g.font = font(42, 700);
+    g.fillText(sc.title || '', cx, 84);
+    g.globalAlpha = alpha * 0.45;
+    g.strokeStyle = hexA(c.main, 0.55);
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(cx - 80, 118); g.lineTo(cx + 80, 118); g.stroke();
+    g.globalAlpha = alpha;
     g.fillStyle = c.dim;
-    sub(g, story, sc, cx, cy + R + 62, W - 420, 24, 400);
+    sub(g, story, sc, cx, H - 96, W - 420, 24, 400);
     g.restore();
   }
 
@@ -374,10 +633,29 @@
     var fn = R[id];
     if (typeof fn !== 'function') fn = R.cafe || R.street;
     if (!fn) { drawConcept(g, story, sc, p, t, alpha); return; }
+    // 运动层（2026-10-05）：原来 2.0%，场景本身只有极轻微的循环动画，
+    // 整段几乎定格。这里补前景粒子 + 底部光带推移，让画面始终有流动感。
+    particles(g, { t: t, n: 16 + Math.floor(p * 18), speed: 0.04, seed: sc.i + 13,
+      color: pal(story.palette).main, r: 2.2, alpha: 0.22 * alpha,
+      box: { x: 50, y: 90, w: W - 100, h: H - 240 } });
+
     g.save();
     g.globalAlpha = alpha;
     // 段间交叉淡入：每段前后各 0.35s 叠化，避免硬切
     fn(g, t, p, { mood: story.palette, place: id, scene: sc });
+    g.restore();
+
+    // 底部一道横向推移的光带（很轻，但保证整段画面有连续变化）
+    g.save();
+    g.globalAlpha = alpha * 0.30;
+    var bandY = H - 246, bandW = 300;
+    var bandX = ((t * 130) % (W + bandW * 2)) - bandW;
+    var bg2 = g.createLinearGradient(bandX, 0, bandX + bandW, 0);
+    bg2.addColorStop(0, 'rgba(255,255,255,0)');
+    bg2.addColorStop(0.5, hexA(pal(story.palette).alt, 0.5));
+    bg2.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = bg2;
+    g.fillRect(bandX, bandY, bandW, 2);
     g.restore();
     // 场景名角标（右上角小字，方便确认「这段用的是哪个场景」）
     var meta = R.meta && R.meta[id];
@@ -448,15 +726,28 @@
     alpha = Math.min(fadeIn, fadeOut, 1);
     fn(g, story, sc, p, t, alpha);
 
-    // 片名题头（前 1.2 秒）
+    // 片名题头（前 1.4 秒）
+    // ⚠️ 原来固定画在 y=120，跟 split(104) / geo(84) / concept 的段标题撞在一起，
+    //   开场 1.4 秒会出现两层字叠成重影（截图里「捡最亮」那种糊字）。
+    //   改到底部也不行：concept 字幕在 cy+262≈622、题头原定 H-118≈602，只差 20px 照样叠。
+    //   正解：题头放在**进度线正上方的空档**（H-30 往上、进度线在 H-6），
+    //   并且这 1.4 秒内不画任何别的字——把整段开头让给它。
     if (t < 1.4 && story.title) {
       var c = pal(story.palette);
       g.save();
       g.globalAlpha = smooth(t / 0.6) * smooth((1.4 - t) / 0.5);
+      var ty = H - 34;
+      var grd2 = g.createLinearGradient(0, ty - 40, 0, ty + 10);
+      grd2.addColorStop(0, 'rgba(0,0,0,0)');
+      grd2.addColorStop(0.5, 'rgba(0,0,0,.6)');
+      grd2.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grd2;
+      g.fillRect(0, ty - 40, W, 50);
       g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillStyle = c.text;
-      g.font = font(46, 700);
-      g.fillText(story.title, W / 2, 120);
+      g.font = font(34, 700);
+      g.shadowColor = hexA(c.main, .55); g.shadowBlur = 16;
+      g.fillText(story.title, W / 2, ty);
       g.restore();
     }
 

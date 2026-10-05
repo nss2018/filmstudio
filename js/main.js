@@ -1372,7 +1372,8 @@
     $('sw-model').value = p.model || cfg.model || '';
     // 方舟按账号授权模型：预设里那个预览模型（doubao-seed-2-0-code-preview）不是每个账号都有，
     // 撞上去就是 401。查到清单就优先用 ep- 推理接入点——那是你自己在控制台建过、必定有权限的。
-    if (p.id === 'ark') {
+    // 走本站 ai.php 代理那条预设（local-ark）模型本来就是空的，同样吃这个兜底。
+    if (p.id === 'ark' || p.id === 'local-ark') {
       var cached = null;
       try { cached = FS.script.readModelCache(p.base); } catch (e) {}
       var ep = (cached || []).filter(function (m) { return m && /^ep-/.test(String(m.id)); });
@@ -1477,13 +1478,15 @@
     })['catch'](function (e) {
       modelTip('✗ ' + e.message);
       // 自动拉失败别吵（可能这家根本不给跨域）；手动点的、或方舟，必须说清楚
-      if (!quiet || cfg.preset === 'ark') hint($('sw-status'), '✗ 拉模型清单失败：' + e.message, 'bad');
+      if (!quiet || cfg.preset === 'ark' || cfg.preset === 'local-ark')
+        hint($('sw-status'), '✗ 拉模型清单失败：' + e.message, 'bad');
     })['finally'](function () { if (btn) btn.disabled = false; });
   }
   $('sw-list').addEventListener('click', function () { pullModels(false, true); });
 
   if (cfg.preset) $('sw-preset').value = cfg.preset;
-  applyPreset(cfg.preset || 'deepseek');
+  // 默认走「本站 ai.php 代理」那条：方舟禁止浏览器直连，默认直连等于开箱就报 CORS/401。
+  applyPreset(cfg.preset || 'local-ark');
   if (cfg.key) $('sw-key').value = cfg.key;
   // 先拿缓存把下拉填上（离线也能选），再悄悄去服务端刷新一次
   (function bootModels() {

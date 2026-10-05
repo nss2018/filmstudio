@@ -360,10 +360,19 @@
   var film = {
     title: '群论：结构之美', template: 'concept', palette: 'ink', engine: '2d',
     bpm: 84, beats: 8, scenes: [], music: true, sub: 'on',
+    audmode: 'music',         // 'music' 纯音乐 | 'both' 人声+配乐 | 'voice' 纯人声 | 'mute' 全静音
     custom: null,      // 手动挑的配乐（音乐工厂出的曲子）；null = 按片名自动生成
     sb: null, sbSeed: null   // 3D 分镜脚本与其种子
   };
   var fBuf = null, fPlaying = false, fStart = 0, fNode = null, fT0 = 0, fRAF = null;
+
+  /** 成片声音四档的人话名字（状态行/导出回执里用，别在 UI 上甩 'music'/'both'） */
+  var AUDMODE_LABEL = {
+    music: '纯音乐（无人声）',
+    both: '人声 + 配乐',
+    voice: '纯人声（不配乐）',
+    mute: '全静音（只出画面）'
+  };
 
   function readFilm() {
     film.title = $('f-title').value.trim() || '未命名';
@@ -374,6 +383,7 @@
     film.beats = parseInt($('f-beats').value, 10) || 8;
     film.music = $('f-music').checked;
     film.sub = $('f-sub').value;      // 关掉后母题函数里就不画字幕
+    film.audmode = ($('f-audmode') && $('f-audmode').value) || 'music';
     film.scenes = [];
     Array.prototype.forEach.call(document.querySelectorAll('#f-scenes .scene'), function (el) {
       var ins = el.querySelectorAll('input');
@@ -564,6 +574,9 @@
     return {
       title: film.title, template: film.template, palette: film.palette,
       engine: film.engine, bpm: film.bpm, beats: film.beats, sub: film.sub,
+      // 声音模式与 3D 画质必须进快照：导出时用的是 snap，不是 film。
+      // 漏掉的话就是「预览是线框、导出是实体」（或反过来），用户只能靠对比才发现。
+      audmode: film.audmode, style: ($('f-style') && $('f-style').value) || 'line',
       scenes: film.scenes.map(function (s) { return { title: s.title, text: s.text }; })
     };
   }
@@ -598,6 +611,7 @@
     readFilm();
     $('f3d-panel').hidden = (v !== '3d');
     $('f-2d-row').hidden = (v === '3d');
+    $('f-style-row').hidden = (v !== '3d');     // 3D 画质只在 3D 引擎下有意义
     // GL 画布永远收着：它只是画板，成帧之后 drawImage 到 stage（含字幕）才给人看。
     // 放它出来既会遮住 2D 画面（黑块），又会把字幕挡掉。
     $('gl').hidden = true;
@@ -605,9 +619,21 @@
     $('f-engine-tip').textContent = v === '3d'
       ? '3D：文案 → 地点 / 角色 / 动作 / 镜头'
       : '2D 母题适合讲道理，3D 适合讲生活';
-    if (v === '3d') { if (glEngine()) runDirector('local'); }
+    if (v === '3d') { if (glEngine()) { applyStyle(); runDirector('local'); } }
     else if (gl3d) { gl3d.clear(); }
     redraw();
+  }
+
+  /** 把 UI 上的 3D 画质档位推给渲染器。
+   *  ⚠️ 必须在 gl3d 已建好之后调（setStyle 是渲染器上的方法）。 */
+  function applyStyle() {
+    if (!gl3d) return;
+    var s = ($('f-style') && $('f-style').value) || 'line';
+    gl3d.setStyle(s);
+    var st = gl3d.stats ? gl3d.stats() : null;
+    var tip = { line: '线条轮廓：只画边、不画面，最轻', both: '线条 + 实体叠加', solid: '实体着色：体积感最足' };
+    if ($('f-style-tip')) $('f-style-tip').textContent = (tip[s] || s) +
+      (st && st.lines ? '（' + st.lines + ' 条线段）' : '');
   }
 
   function directorOpts() {
@@ -740,6 +766,16 @@
     } else if (FS.s2dPick) {
       film.scenes2d = FS.s2dPick.pickScenes(film.scenes, film.sbSeed || 0);
     }
+    // ⚠️ AI 画过的段要**盖在自动选景之上**（2026-10-05 新增）。
+    //   以前 applyScenes 是「整份重算」，任何一次改文案都会把 AI 那一段弹回手写场景，
+    //   用户会发现「刚画好的场景莫名其妙变回咖啡馆了」——但代码完全没错，是顺序问题。
+    if (film.aiScenes) {
+      for (var k in film.aiScenes) {
+        var i = +k;
+        if (film.scenes[i] && FS.s2dScenes && FS.s2dScenes[film.aiScenes[k]]) film.scenes2d[i] = film.aiScenes[k];
+        else delete film.aiScenes[k];          // 场景被清掉了，索引也一起清
+      }
+    }
     var names = (film.scenes2d || []).map(function (id) {
       return (FS.s2dScenes.meta && FS.s2dScenes.meta[id] || {}).name || id;
     });
@@ -751,10 +787,113 @@
     var isDaily = film.template === 'daily';
     var row = $('f-scene-row');
     if (row) row.hidden = !isDaily;
-    if (isDaily) { fillSceneSelect(); applyScenes(); }
+    var aiRow = $('f-aiscene-row');
+    if (aiRow) aiRow.hidden = !isDaily;
+    if (isDaily) { fillSceneSelect(); fillAiSceneSelect(); applyScenes(); }
+  }
+
+  /* ---------------- 2D：让 AI 直接画这一段 ----------------
+   * 这里是「取材智能化」的最后一环：词典匹配决定**在哪个场景里画**，
+   * AI 决定**这个场景长什么样**（背景层次、道具、人物位置、光）。
+   *
+   * 失败处理原则（不能妥协）：AI 画的代码必须过 aiscene 的静态检查 + 冒烟，
+   * 任何一关不过就**原样保留手写场景**，只提示一句为什么 ——
+   * 绝不能让成片开天窗（用户看到的黑屏比「没画 AI」糟糕得多）。
+   */
+  function fillAiSceneSelect() {
+    var sel = $('f-ai-scene');
+    if (!sel) return;
+    var cur = sel.value;
+    sel.innerHTML = '';
+    var ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = '选一段…（共 ' + (film.scenes.length || 1) + ' 段）';
+    sel.appendChild(ph);
+    film.scenes.forEach(function (sc, i) {
+      var o = document.createElement('option');
+      o.value = String(i);
+      o.textContent = '第 ' + (i + 1) + ' 段 · ' + ((sc.title || sc.text || '（空）').slice(0, 16));
+      sel.appendChild(o);
+    });
+    sel.value = cur;
+  }
+
+  function aiPaint() {
+    if (!FS.aiscene) { hint($('f-ai-status'), '✗ aiscene.js 没加载', 'bad'); return; }
+    if (!FS.script) { hint($('f-ai-status'), '✗ 文案模块没加载', 'bad'); return; }
+    var idx = parseInt(($('f-ai-scene') && $('f-ai-scene').value) || '0', 10) || 0;
+    var sc = film.scenes[idx];
+    if (!sc || (!sc.text && !sc.title)) {
+      hint($('f-ai-status'), '✗ 第 ' + (idx + 1) + ' 段没有文案，先填内容', 'bad');
+      return;
+    }
+    var cfg = FS.script.loadCfg ? FS.script.loadCfg() : null;
+    if (!cfg || !cfg.key) {
+      hint($('f-ai-status'), '✗ 还没填 API Key —— 画场景要联网调模型，去「API 设置」填一个', 'bad');
+      return;
+    }
+    var btn = $('f-ai-paint');
+    var old = btn.textContent;
+    btn.disabled = true;
+    var id = 'ai-' + idx;
+    var prompt = FS.aiscene.prompt({
+      title: sc.title, text: sc.text,
+      mood: film.mood || '克制准确'
+    });
+    btn.textContent = '⏳ AI 正在画…';
+    hint($('f-ai-status'), '⏳ 第 ' + (idx + 1) + ' 段：模型写码中（10~40 秒）…', 'ok');
+
+    FS.script.callApi(cfg, prompt, function (txt) { return txt; }).then(function (raw) {
+      var code = FS.aiscene.extract(raw);
+      var reg = FS.aiscene.register(id, code, { name: 'AI·' + (sc.title || ('第' + (idx + 1) + '段')), tag: '按文案现画' });
+      // 这一段指向新场景；别让 applyScenes 把它当「手动指定」覆盖掉
+      film.scenes2d = film.scenes2d || FS.s2dPick.pickScenes(film.scenes, film.sbSeed || 0);
+      film.scenes2d[idx] = id;
+      film.aiScenes = film.aiScenes || {};
+      film.aiScenes[idx] = id;
+      fillSceneSelect();
+      drawTimeline();
+      redraw();
+      hint($('f-ai-status'), '✓ 第 ' + (idx + 1) + ' 段已由 AI 画出（' + reg.calls +
+        ' 次绘制调用）。预览里右上角角标会写「AI 场景」；不满意点「换一版」重画。', 'ok');
+    })['catch'](function (e) {
+      // ★ 失败一律退回手写场景，绝不让这一段变黑屏
+      FS.aiscene.unregister(id);
+      hint($('f-ai-status'), '✗ AI 这次没画成（' + (e && e.message ? e.message : '未知原因') +
+        '）—— 已保留原来的手写场景，片子照常出。', 'bad');
+    })['finally'](function () {
+      btn.disabled = false;
+      btn.textContent = old;
+    });
+  }
+
+  function aiClear() {
+    if (!FS.aiscene) return;
+    var n = 0;
+    for (var k in FS.s2dScenes || {}) {
+      if (FS.aiscene.isAi(k)) { FS.aiscene.unregister(k); n++; }
+    }
+    film.aiScenes = {};
+    film.scenes2d = null;
+    fillSceneSelect();
+    applyScenes();
+    drawTimeline();
+    redraw();
+    hint($('f-ai-status'), n ? ('已清除 ' + n + ' 个 AI 场景，全部退回手写场景。') : '当前没有 AI 场景。', 'ok');
   }
 
   $('f-scene').addEventListener('change', function () { readFilm(); applyScenes(); redraw(); });
+  $('f-ai-paint').addEventListener('click', aiPaint);
+  $('f-ai-clear').addEventListener('click', aiClear);
+  $('f-ai-scene').addEventListener('change', function () {
+    var i = +this.value;
+    var sc = film.scenes[i];
+    if (!sc) return;
+    // 换一段时先说说这一段要画什么，别让用户点了按钮才知道选错段
+    var already = film.aiScenes && film.aiScenes[i] && FS.aiscene && FS.aiscene.isAi(film.aiScenes[i]);
+    hint($('f-ai-status'), '第 ' + (i + 1) + ' 段' + (already ? '（这一段已经是 AI 画的，再点会重画）' : '') +
+      '：' + ((sc.text || sc.title || '（无文案）').slice(0, 24)), already ? 'ok' : '');
+  });
   $('f-scene-auto').addEventListener('click', function () {
     $('f-scene').value = '';
     film.sbSeed = (FS.director.fnv(String(film.sbSeed) + '|s2d')) >>> 0;
@@ -762,6 +901,10 @@
   });
 
   $('f-engine').addEventListener('change', function () { setEngine(this.value); });
+  $('f-style').addEventListener('change', function () {
+    applyStyle();
+    redraw();                      // 立刻重画一帧：档位切换要马上看得见，不能等下次播放
+  });
   $('f3d-go').addEventListener('click', function () { runDirector($('f3d-mode').value); });
   $('f3d-reroll').addEventListener('click', function () {
     // 换种子 = 同一部文案换一版分镜：地点走位、镜头、氛围都会变，主角不变
@@ -820,13 +963,15 @@
     buildNarrPlan(film, c, function (m) { $('f-preview').textContent = m; }).then(function (plan) {
       if (fPlaying) return;                        // 合成期间用户又点了停止/重播
       var p = plan0;
-      if (!p.use) {                                // 判为不合拍 → 这台机器这次就没配乐可放
-        fBuf = null;
-        hint($('f-musicsrc'), '⏹ ' + p.reason + ' → 这次不配乐，只有画面 + 配音', 'bad');
+      if (!p.use && (film.audmode === 'music' || film.audmode === 'both')) {
+        fBuf = null;                               // 判为不合拍 → 这台机器这次就没配乐可放
+        hint($('f-musicsrc'), '⏹ ' + p.reason + ' → 这次不配乐，只有画面' +
+          (film.audmode === 'both' ? ' + 人声' : '（纯音乐模式，配乐判为不合拍）'), 'bad');
       }
       // ⚠️ fBuf 以前压根没人赋值过，等于「预览配乐」这个开关一直是死的。
       //    现在按计划渲染一次（同一个 buffer，试听/导出/预览听到的都是它）。
-      var audio = p.use ? filmRenderAudio() : Promise.resolve(null);
+      //    filmRenderAudio 内部按声音模式判，纯人声/全静音这一档直接不配乐。
+      var audio = p.use ? filmRenderAudio(film) : Promise.resolve(null);
       return audio.then(function (buf) {
         if (fPlaying) return;
         fBuf = buf;
@@ -849,8 +994,13 @@
         // 把「这次到底有没有人声、有没有配乐」写进状态行：以前配音挂了只有按钮复位，
         // 用户听不到声音却不知道原因（2026-10-05「视频里没有文字语音合成」）。
         var heard = [];
-        heard.push(plan && plan.length ? ('配音 ' + plan.length + ' 段') : '无配音');
-        heard.push((buf && film.music) ? '有配乐' : '无配乐');
+        heard.push(AUDMODE_LABEL[film.audmode] || film.audmode);
+        if (film.audmode === 'both' || film.audmode === 'voice') {
+          heard.push(plan && plan.length ? ('人声 ' + plan.length + ' 段') : '无人声');
+        }
+        if (film.audmode !== 'voice' && film.audmode !== 'mute') {
+          heard.push(buf ? '有配乐' : '无配乐');
+        }
         hint($('f-status'), (plan && plan.narrFail ? '⚠ ' + plan.narrNote + ' · ' : '✓ ') + heard.join(' · '),
           plan && plan.narrFail ? 'bad' : 'ok');
         tickFilm();
@@ -902,6 +1052,17 @@
     $(id).addEventListener('input', function () { readFilm(); redraw(); });
   });
   $('f-music').addEventListener('change', function () { readFilm(); });
+  $('f-audmode').addEventListener('change', function () {
+    readFilm();
+    // 选了「纯人声」/「全静音」还开着「自动生成配乐」会让人以为配乐会进片子，
+    // 实际会被 filmRenderAudio 直接跳过 —— 这里直接把勾去掉，让界面和结果一致。
+    var m = film.audmode;
+    var needMusic = (m === 'music' || m === 'both');
+    if (!needMusic && $('f-music').checked) { $('f-music').checked = false; readFilm(); }
+    if (needMusic && !$('f-music').checked) { $('f-music').checked = true; readFilm(); }
+    hint($('f-status'), '成片声音：' + (AUDMODE_LABEL[m] || m) +
+      (m === 'music' ? ' —— 字幕照常显示，导出没有人声，只有配乐' : ''), 'ok');
+  });
 
   // ⚠️ 两条链路都得先过 parseScore：工厂/故事吐的都是 {p, beat} 形式（没 t），
   // 直接送渲染器 = 音符时间 undefined，一路 NaN 变整段静音，还查不出毛病。
@@ -983,9 +1144,17 @@
    *  用户看到的就是「点了播放没反应」，完全不知道是配音挂了（2026-10-05 反馈「没有语音合成」）。
    *  现在逐段容错：成功的照常排程，失败的记下原因，片子照样出（画面 + 能合成的那几段）。 */
   function buildNarrPlan(st, c, onProg) {
-    var voice = ($('f-voice') && $('f-voice').value) || '';
     function bare(note) { var a = []; a.narrFail = 0; a.narrNote = note; return a; }
-    if (!voice) return Promise.resolve(bare('配音设为「无」'));
+    var mode = st.audmode || 'music';
+    // ★ 声音模式（2026-10-05 新增）：把「要不要人声」从音色下拉里独立出来。
+    //   以前「不配音」的唯一办法是把音色选成「无」，于是「纯音乐」这件事在界面上
+    //   表达不出来（用户要的是：字幕照常显示、没有人声、只有配乐）。
+    //   现在纯音乐是默认档，人声只由 audmode 决定，音色只决定「用哪个嗓子」。
+    if (mode === 'music' || mode === 'mute') {
+      return Promise.resolve(bare(mode === 'mute' ? '全静音模式' : '纯音乐模式（不出人声）'));
+    }
+    var voice = ($('f-voice') && $('f-voice').value) || '';
+    if (!voice) return Promise.resolve(bare('音色没选（不在可选列表里）'));
     var texts = st.scenes.map(function (s) { return (s.text || '').trim(); });
     var need = [];
     texts.forEach(function (tx, i) { if (tx) need.push(i); });
@@ -1043,8 +1212,15 @@
     hint($('f-status'), '⏹ 已停止在第 ' + k + '/' + frames + ' 帧', 'ok');
   }
 
-  /** 渲染配乐。判为不合拍时返回 null —— 宁可不配，也别放一段乱响的 */
-  function filmRenderAudio() {
+  /** 渲染配乐。判为不合拍时返回 null —— 宁可不配，也别放一段乱响的
+   *  opts.force = true 时无视声音模式（「只导配乐」按钮是显式要音乐，
+   *  即便成片档位选了「纯人声」也该给曲子，不能返回 null 让人以为坏了）。 */
+  function filmRenderAudio(st, opts) {
+    st = st || film; opts = opts || {};
+    // 声音模式：'voice'（纯人声）与 'mute'（全静音）这一档明确不要配乐，
+    // 否则用户选的是「只听人声」，实际导出却带着一段背景旋律。
+    var mode = st.audmode || 'music';
+    if (!opts.force && (mode === 'voice' || mode === 'mute')) return Promise.resolve(null);
     var p = musicPlan();
     if (!p.use) return Promise.resolve(null);
     var sc = FS.parseScore(JSON.stringify(p.raw));   // 顺带校验，坏谱会给人话错误
@@ -1068,7 +1244,7 @@
       hint($('f-status'), '⏹ 这次不导配乐：' + p.reason, 'bad');
       return;
     }
-    filmRenderAudio().then(function (buf) {
+    filmRenderAudio(film, { force: true }).then(function (buf) {
       if (!buf) { hint($('f-status'), '⏹ 这次不导配乐：' + p.reason, 'bad'); return; }
       var blob = new Blob([FS.encodeWav(buf)], { type: 'audio/wav' });
       FS.download(blob, (film.title || 'score') + '.wav');
@@ -1121,10 +1297,10 @@
 
     // 配音先合成（进度见状态条），再渲配乐，最后一起排进录制流
     buildNarrPlan(snap, c, function (m) { btn.textContent = m; }).then(function (plan) {
-      return filmRenderAudio().then(function (buf) { return { buf: buf, plan: plan }; });
+      return filmRenderAudio(snap).then(function (buf) { return { buf: buf, plan: plan }; });
     }).then(function (r) {
       var buf = r.buf, plan = r.plan;
-      if (snap.engine === '3d' && gl3d && sbSnap) gl3d.setStoryboard(sbSnap);
+      if (snap.engine === '3d' && gl3d && sbSnap) { gl3d.setStoryboard(sbSnap); gl3d.setStyle(snap.style); }
       var media = c.createMediaStreamDestination();
       var node = null;
       if (buf) {                        // 判为不合拍时 buf 为 null —— 只录画面 + 配音，不放空响轨
@@ -1162,8 +1338,12 @@
       rec.start();
       fNode = node; fPlaying = false;                  // 导出不走播放逻辑，自己排帧
       var what = [];
-      if (buf) what.push('配乐'); else what.push('无配乐（' + (musicPlan().reason || '不合拍') + '）');
-      what.push(plan && plan.length ? ('配音 ' + plan.length + ' 段') : '无配音');
+      if (snap.audmode === 'voice') what.push('仅人声');
+      else if (snap.audmode === 'mute') what.push('无音轨');
+      else what.push(buf ? '配乐' : '无配乐（' + (musicPlan().reason || '不合拍') + '）');
+      if (snap.audmode === 'both' || snap.audmode === 'voice') {
+        what.push(plan && plan.length ? ('人声 ' + plan.length + ' 段') : '无人声');
+      }
       hint($('f-status'), '导出中… ' + (canPush ? '逐帧确定性模式' : '自动抓帧模式（该浏览器不支持手动推帧）') +
         ' · 本次含：' + what.join(' + '), 'ok');
 

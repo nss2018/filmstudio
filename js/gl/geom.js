@@ -227,8 +227,159 @@
     return g;
   }
 
-  /** 沿 Y 渐变着色（天空渐变、地面远处变暗） */
-  function paintGradientY(g, cLow, cHigh, y0, y1) {
+  /* ================================================================
+   *  描边（线框）几何 —— 2026-10-05
+   *
+   *  为什么要这个：现有 3D 场景全是**实体低多边形**（676~2916 面），
+   *  每个物体都走「法线 + 4 盏点光 + 雾 + 辉光」的完整着色，一屏要算
+   *  几万个三角形。线框风格（只画轮廓线）看起来反而更像「设计过的」，
+   *  而且**只要边不要面** —— 顶点还在，光照计算可以省掉一大半。
+   *
+   *
+   *  ⚠️⚠️ 去重必须按**坐标**做，不能按顶点下标（2026-10-05 实测踩到）：
+   *  本项目的 tri()/quad() 是「每个面 push 一组全新顶点」的写法（低多边形
+   *  刻意不共享顶点，好让每个面有硬边自己的法线）。所以一个立方体的
+   *  12 条边在 idx 里是 **36 个互不相同的顶点对** —— 按下标去重等于没去重，
+   *  画出来是三倍亮度的粗线，斜面上还会 z-fighting 一样地抖。
+   *  正解：先按量化坐标把顶点「合并成规范号」，再去重边。
+   *  量化取 1e-4（世界坐标的小数点后 4 位）——场景里最小构件也有 1e-2 量级，
+   *  1e-4 绝不会把两条不同的边误并成一个。
+   * ================================================================ */
+  function edges(geo, opt) {
+    opt = opt || {};
+    var idx = geo.idx, pos = geo.pos, col = geo.col, nrm = geo.nrm;
+    var Q = opt.quant === undefined ? 1e4 : opt.quant;      // 坐标量化精度
+    var seen = opt.noDedup ? null : {};
+    var vmap = opt.noDedup ? null : {};
+    var nverts = 0;
+    var out = empty();
+    /** 顶点下标 → 规范顶点号（同坐标的多个下标归到同一个） */
+    function canon(vi) {
+      if (!vmap) return vi;                            // noDedup 模式不做规范，直接用原下标
+      var k = Math.round(pos[vi * 3] * Q) + '|' + Math.round(pos[vi * 3 + 1] * Q) +
+              '|' + Math.round(pos[vi * 3 + 2] * Q);
+      var got = vmap[k];
+      if (got === undefined) { got = nverts++; vmap[k] = got; }
+      return got;
+    }
+    /* ---------- 折痕过滤：把「同一个平面内的三角化对角线」剔掉 ----------
+     *  实测出图的问题：一面墙/地板被 quad 拆成两个三角后，中间那条**对角线**
+     *  也被描了出来，在大片平面上 criss-cross 一片，看起来像毛线而不是建筑线稿
+     *  （线框预览图里能直接看到地板上那堆交叉线）。
+     *
+     *  判据：一条边如果被两个三角形共用，且两个三角形的**法线夹角很小**
+     *  （共面），那它就是「平面内部的三角化线」，不是物体的棱 → 剔掉。
+     *  盒子真正的 90° 棱会留下。
+     *
+     *  为什么不能用「只出现一次的边就剔掉」：那种剔法会把悬边（只属于一个面）
+     *  也删了，而 low-poly 里 open mesh 不少见。这里只看夹角，更保守。
+     *
+     *  opt.creaseAngle = 保留的最大夹角（度）。默认 18° ——
+     *  够钝（球/圆柱的相邻面要留下），又够严（平面三角化线是 0° 必剔）。
+     */
+    var faceOf = {}, angTol = null;
+    if (opt.creaseAngle !== undefined && opt.creaseAngle !== null) {
+      angTol = Math.cos(Math.max(0, Math.min(89.9, opt.creaseAngle)) * Math.PI / 180);
+      var fi = 0;
+      for (var fi2 = 0; fi2 < idx.length; fi2 += 3, fi++) {
+        var t0 = idx[fi2], t1 = idx[fi2 + 1], t2 = idx[fi2 + 2];
+        [[t0, t1], [t1, t2], [t2, t0]].forEach(function (pr) {
+          var kk = canon(pr[0]) < canon(pr[1])
+            ? canon(pr[0]) + '_' + canon(pr[1])
+            : canon(pr[1]) + '_' + canon(pr[0]);
+          if (!faceOf[kk]) faceOf[kk] = [];
+          faceOf[kk].push(fi);
+        });
+      }
+      // 每个三角面的法线
+      var fn_ = [];
+      for (var f = 0; f < idx.length / 3; f++) {
+        var a0 = idx[f * 3], a1 = idx[f * 3 + 1], a2 = idx[f * 3 + 2];
+        var ux = pos[a1 * 3] - pos[a0 * 3], uy = pos[a1 * 3 + 1] - pos[a0 * 3 + 1], uz = pos[a1 * 3 + 2] - pos[a0 * 3 + 2];
+        var vx = pos[a2 * 3] - pos[a0 * 3], vy = pos[a2 * 3 + 1] - pos[a0 * 3 + 1], vz = pos[a2 * 3 + 2] - pos[a0 * 3 + 2];
+        var nx2 = uy * vz - uz * vy, ny2 = uz * vx - ux * vz, nz2 = ux * vy - uy * vx;
+        var len = Math.hypot(nx2, ny2, nz2) || 1;
+        fn_.push([nx2 / len, ny2 / len, nz2 / len]);
+      }
+      var isCrease = function (k) {
+        var fs = faceOf[k];
+        if (!fs || fs.length < 2) return true;           // 边界/悬边：保留
+        var A = fn_[fs[0]], Bv = fn_[fs[1]];
+        var dp = A[0] * Bv[0] + A[1] * Bv[1] + A[2] * Bv[2];
+        return dp < angTol;                              // 夹角 > 阈值 → 是棱，留
+      };
+    }
+
+    function addEdge(a, b) {
+      if (a === b) return;                              // 退化三角形
+      var ca = canon(a), cb = canon(b);
+      if (ca === cb) return;                            // 两端同一点 → 零长边
+      var k = ca < cb ? (ca + '_' + cb) : (cb + '_' + ca);
+      if (seen) {
+        if (seen[k]) return;
+        seen[k] = 1;
+      }
+      if (isCrease && !isCrease(k)) return;             // 共面 → 三角化线，剔掉
+      // 线的颜色取两端顶点的平均色（两端可能属于不同面，描边跟着物体走）
+      var r = 0, gg = 0, bb = 0, nx = 0, ny = 0, nz = 0, n = 0;
+      [a, b].forEach(function (vi) {
+        r += col[vi * 3]; gg += col[vi * 3 + 1]; bb += col[vi * 3 + 2];
+        nx += nrm[vi * 3]; ny += nrm[vi * 3 + 1]; nz += nrm[vi * 3 + 2];
+        n++;
+      });
+      out.pos.push(pos[a * 3], pos[a * 3 + 1], pos[a * 3 + 2]);
+      out.pos.push(pos[b * 3], pos[b * 3 + 1], pos[b * 3 + 2]);
+      out.nrm.push(nx / n, ny / n, nz / n);
+      out.nrm.push(nx / n, ny / n, nz / n);
+      out.col.push(r / n, gg / n, bb / n);
+      out.col.push(r / n, gg / n, bb / n);
+      out.idx.push(out.idx.length, out.idx.length + 1);
+    }
+    for (var i = 0; i < idx.length; i += 3) {
+      var a = idx[i], b = idx[i + 1], c = idx[i + 2];
+      addEdge(a, b); addEdge(b, c); addEdge(c, a);
+    }
+    // 极短线段（< eps）在屏幕上就是亮点，删掉省一半线段
+    if (opt.minLen) {
+      var f = empty();
+      for (var j = 0; j < out.idx.length; j += 2) {
+        var ia = out.idx[j], ib = out.idx[j + 1];
+        var dx = out.pos[ia * 3] - out.pos[ib * 3];
+        var dy = out.pos[ia * 3 + 1] - out.pos[ib * 3 + 1];
+        var dz = out.pos[ia * 3 + 2] - out.pos[ib * 3 + 2];
+        if (Math.hypot(dx, dy, dz) < opt.minLen) continue;
+        var off = f.pos.length / 3;
+        f.pos.push(out.pos[ia * 3], out.pos[ia * 3 + 1], out.pos[ia * 3 + 2]);
+        f.pos.push(out.pos[ib * 3], out.pos[ib * 3 + 1], out.pos[ib * 3 + 2]);
+        f.nrm.push(out.nrm[ia * 3], out.nrm[ia * 3 + 1], out.nrm[ia * 3 + 2]);
+        f.nrm.push(out.nrm[ib * 3], out.nrm[ib * 3 + 1], out.nrm[ib * 3 + 2]);
+        f.col.push(out.col[ia * 3], out.col[ia * 3 + 1], out.col[ia * 3 + 2]);
+        f.col.push(out.col[ib * 3], out.col[ib * 3 + 1], out.col[ib * 3 + 2]);
+        f.idx.push(off, off + 1);
+      }
+      return f;
+    }
+    return out;
+  }
+
+  /** 整份 place 几何（solid/water/glow）一次性转成描边几何。
+   *  water 不进描边：水面是平的，描出来是一堆重叠横线，反而脏。 */
+  function placeEdges(built, opt) {
+    var out = empty();
+    ['solid', 'glow'].forEach(function (k) {
+      var g = built[k];
+      if (!g || !g.idx || !g.idx.length) return;
+      var e = edges(g, opt);
+      var off = out.pos.length / 3;
+      for (var i = 0; i < e.pos.length; i++) out.pos.push(e.pos[i]);
+      for (var i2 = 0; i2 < e.nrm.length; i2++) out.nrm.push(e.nrm[i2]);
+      for (var i3 = 0; i3 < e.col.length; i3++) out.col.push(e.col[i3]);
+      for (var i4 = 0; i4 < e.idx.length; i4++) out.idx.push(e.idx[i4] + off);
+    });
+    return out;
+  }
+
+  /** 沿 Y 渐变着色（天空渐变、地面远处变暗） */  function paintGradientY(g, cLow, cHigh, y0, y1) {
     for (var i = 0, j = 1; j < g.pos.length; i += 3, j += 3) {
       var t = (g.pos[j] - y0) / ((y1 - y0) || 1);
       t = t < 0 ? 0 : t > 1 ? 1 : t;
@@ -286,6 +437,7 @@
     box: box, sphere: sphere, cylinder: cylinder, cone: cone, prism: prism,
     plane: plane, terrain: terrain, extrude: extrude, blob: blob,
     xform: xform, merge: merge, paint: paint, paintGradientY: paintGradientY,
+    edges: edges, placeEdges: placeEdges,
     color: color, shade: shade, hsl2rgb: hsl2rgb
   };
 })(typeof window !== 'undefined' ? window : this);

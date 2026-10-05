@@ -5,6 +5,8 @@
 'use strict';
 const path = require('path');
 global.window = global;
+require(path.join(__dirname, '..', 'js', 'type.js'));    // 排版模块（story.js 依赖它）
+require(path.join(__dirname, '..', 'js', 'aiscene.js')); // AI 生成 2D 场景代码
 require(path.join(__dirname, '..', 'js', 'theme.js'));   // 界面 + canvas 调色板（UI 层唯一真源）
 require(path.join(__dirname, '..', 'js', 'score.js'));
 require(path.join(__dirname, '..', 'js', 'wav.js'));
@@ -1272,6 +1274,16 @@ const listMsg = function (cfg) {
     void realFont;
     return g;
   }
+  /** 判断一段文案有没有真的被画上去。
+   *  排版模块改成逐字入场后，一句话会变成 N 次 fillText（每次一个字），
+   *  所以「整句一次出现」这种老断言从 2026-10-05 起全部失效 —— 这里既能认
+   *  整句一次填（老母题/标题仍是那样），也能把逐字序列拼回来再认。 */
+  function hasText(g, text) {
+    if (!text) return false;
+    if (g.texts.indexOf(text) >= 0) return true;
+    const joined = g.texts.join('');
+    return joined.indexOf(text) >= 0;
+  }
   const dfilm = {
     title: '城市的一天', template: 'daily', palette: 'ink', bpm: 84, beats: 8, sub: 'on',
     scenes: [
@@ -1282,15 +1294,18 @@ const listMsg = function (cfg) {
   const dtl = FS.story.timeline(dfilm);
   const dg = spyCtx();
   FS.story.drawFrame(dg, dfilm, dtl.marks[0].dur * 0.6);
+  // ⚠️ 2026-10-05：字幕改走 FS.type.subtitle 之后是**逐字** fillText 的，
+  //   再也不会出现「整句一次填完」这种 fillText(整句)。所以断言不能只找整句，
+  //   要能把逐字序列拼回来（hasText 就是干这个的）。
   ok('daily 模板把文案画上去了（以前一个字都不画）',
-    dg.texts.indexOf(dfilm.scenes[0].text) >= 0, '(本帧共 ' + dg.texts.length + ' 处文字)');
-  ok('daily 也画段标题', dg.texts.indexOf('清晨的厨房') >= 0);
+    hasText(dg, dfilm.scenes[0].text), '(本帧共 ' + dg.texts.length + ' 处文字)');
+  ok('daily 也画段标题', hasText(dg, '清晨的厨房'));
 
   // 「字幕」开关关掉后，daily 也不该再画文案（跟其它母题保持一致）
   const dfilm2 = JSON.parse(JSON.stringify(dfilm)); dfilm2.sub = 'off';
   const dg2 = spyCtx();
   FS.story.drawFrame(dg2, dfilm2, dtl.marks[0].dur * 0.6);
-  ok('字幕关掉后 daily 也不画文案', dg2.texts.indexOf(dfilm.scenes[0].text) < 0);
+  ok('字幕关掉后 daily 也不画文案', !hasText(dg2, dfilm.scenes[0].text));
 
   // 对比模板：标题没写 vs 时，以前右侧恒为字面量 'B'
   function splitTexts(title) {
@@ -1529,6 +1544,482 @@ const listMsg = function (cfg) {
       if (!savedScript) FS.script = savedScript;
     }
   })();
+
+  /* ================================================================
+   * 排版模块 FS.type（js/type.js，2026-10-05）
+   * 为什么要单独测它：它接管了所有母题的字幕与标题，一处画歪
+   * 就是「字压在画面上」「字根本不出现在导出里」这类问题，
+   * 而这些在 node 里量得到（几何断言），不必等截图。
+   * ================================================================ */
+  ok('FS.type 已加载并导出齐了 8 个零件', FS.type && ['revealText','title','kicker','subtitle','wrap','hitRanges','keywords','band']
+    .every((k) => typeof FS.type[k] === 'function'));
+  ok('排版模块不依赖 ctx.letterSpacing（Safari 旧版没有）', !/letterSpacing\s*=/.test(
+    require('fs').readFileSync(path.join(__dirname, '..', 'js', 'type.js'), 'utf8')));
+
+  {
+    const g = stubCtx();
+    // measureText 必须跟字号挂钩，才能验「字有没有出框」
+    g.measureText = (t) => ({ width: String(t).length * 10 });
+    const T = FS.type;
+
+    // ① 逐字入场：p=0 时一个字都不该画（否则「还没出场就看见了」）
+    ok('revealText 在 p=0 时不画任何字（还没出场就看见=静态感）',
+      T.revealText(g, '结构之美', 100, 100, { p: 0, size: 40 }) === 0);
+    const mid = T.revealText(g, '结构之美', 100, 100, { p: 0.3, size: 40 });
+    const end = T.revealText(g, '结构之美', 100, 100, { p: 1, size: 40 });
+    // ⚠️ 必须用长句验「逐字」：4 个字在 p=0.3 时全出完了（stagger 上限 0.05，per 0.30），
+    //    拿它断言「中途 < 全部」是拿短句当长句测，测的是 clamp 不是 stagger。
+    const mid2 = T.revealText(g, '一个用来验证逐字入场的完整句子', 100, 100, { p: 0.25, size: 30 });
+    const end2 = T.revealText(g, '一个用来验证逐字入场的完整句子', 100, 100, { p: 1, size: 30 });
+    ok('revealText 随 p 推进逐字增加（0 < 中途 < 全部）',
+      mid > 0 && mid === end && mid2 > 0 && mid2 < end2);
+
+    // ② stagger 按字数自适应：20 字的长句也必须在合理时间内出完
+    const long = '这是一句很长的字幕用来验证逐字入场的节奏不会被拖到段尾才出完';
+    ok('长字幕 stagger 自适应（整句在 0.85 拍内出完，不会拖到段尾）',
+      T.revealText(g, long, 100, 100, { p: 0.85, size: 30 }) === long.length);
+
+    // ③ 折行：超宽必须折，且中文按字折
+    const w1 = T.wrap(g, '短句', 1000);
+    const w2 = T.wrap(g, '一二三四五六七八九十', 50);   // 每字 10px，50px 装 5 字
+    ok('wrap 宽内不折行', w1.length === 1);
+    ok('wrap 超宽按字折行（≤2 行/每行 ≤5 字）', w2.length >= 2 && w2.every((l) => l.length <= 5));
+
+    // ④ 关键词：书名号里的词优先，其次数字/英文
+    const kw = T.keywords('读《群论》只用 3 个 WebGL 概念就够了');
+    ok('keywords 抓到了书名号里的词', kw.indexOf('群论') >= 0);
+    ok('keywords 抓到了数字/英文', kw.some((k) => /3|WebGL/.test(k)));
+    ok('keywords 最多 3 个（太多会满屏发光）', kw.length <= 3);
+
+    // ⑤ 命中区间：'WebGL' 与 'WebGL2' 在同一处重叠（8..13 与 8..14）→ 必须合成一条
+    const hr = T.hitRanges('WebGL 与 WebGL2 的差别', ['WebGL', 'WebGL2']);
+    ok('hitRanges 合并重叠区间（不会重复上色）',
+      hr.length === 2 && hr[0][0] === 0 && hr[0][1] === 5 && hr[1][0] === 8 && hr[1][1] === 14,
+      JSON.stringify(hr));
+    // 无关键词时返回空数组（不能返回 [[0,0]] 这种把整行都点亮的东西）
+    ok('hitRanges 无命中时返回空数组', T.hitRanges('普通一句话', ['不存在']).length === 0);
+
+    // ⑥ 字幕返回行数（母题靠它算带高），且 off 时必须 0
+    const n1 = T.subtitle(g, '一行字幕', 640, 600, { p: 1, size: 30, band: {} });
+    const n2 = T.subtitle(g, '一行字幕', 640, 600, { p: 1, size: 30, off: true });
+    ok('subtitle 返回占用行数', n1 >= 1);
+    ok('subtitle 关闭时返回 0 且不画字', n2 === 0);
+
+    // ⑦ 字号自动收：超长文案不许溢出到三行
+    const n3 = T.subtitle(g, '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十' +
+      '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十', 640, 600,
+      { p: 1, size: 30, maxW: 400, maxLines: 2, band: {} });
+    ok('超长字幕自动缩到 ≤2 行（不溢出画面）', n3 <= 2);
+
+    // ⑧ 带高按行数算：两行字幕不该吃掉 230px 的画面
+    const topOf = (lines, baseY, lh) => baseY - (lines - 1) * lh / 2 - lh * 0.92;
+    ok('字幕带高度随行数收敛（一行 < 两行）',
+      topOf(1, 600, 45) > topOf(2, 600, 45));
+    // 字幕太靠上时不铺带（否则吃掉大半个画面）
+    ok('band 在字幕过靠上时直接不铺', (() => {
+      const g2 = stubCtx();
+      let filled = 0;
+      g2.fillRect = () => filled++;
+      T.band(g2, 640, 120, 45, 1, { W: 1280, H: 720 });
+      return filled === 0;
+    })());
+  }
+
+  /* ================================================================
+   * 成片声音四档（2026-10-05）
+   * 回归点：以前「不配音」只能把音色选成「无」，纯音乐在界面上表达不出来；
+   * 且 filmRenderAudio 不看声音模式 → 选「纯人声」也会带配乐。
+   * ================================================================ */
+  section('\n[19] 成片声音模式');
+  {
+    const src = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8');
+    const html = require('fs').readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+    ok('UI 有成片声音四档（纯音乐/人声+配乐/纯人声/全静音）',
+      /id="f-audmode"/.test(html) && /value="music"/.test(html) && /value="both"/.test(html) &&
+      /value="voice"/.test(html) && /value="mute"/.test(html));
+    ok('默认档是纯音乐（不出人声）', /<option value="music" selected>纯音乐/.test(html));
+    ok('配音不再是「默认开 + 无」这种绕路的表达', !/value=""[^>]*>无（不出人声）/.test(html));
+    ok('buildNarrPlan 按 audmode 决定要不要人声（music/mute 直接不合成）',
+      /mode === 'music' \|\| mode === 'mute'/.test(src));
+    ok('纯人声/全静音时 filmRenderAudio 返回 null（不会偷偷带配乐）',
+      /!opts\.force && \(mode === 'voice' \|\| mode === 'mute'\)/.test(src));
+    ok('「只导配乐」按钮无视声音模式（显式要曲子，force）',
+      /filmRenderAudio\(film, \{ force: true \}\)/.test(src));
+    ok('状态行按档位说人话，不是甩 music/voice',
+      /AUDMODE_LABEL/.test(src) && /纯音乐（无人声）/.test(src));
+  }
+
+  /* ================================================================
+   * 开场题头闸门 + 光线闸门（2026-10-05，都是出图实测抓出来的）
+   * ================================================================ */
+  section('\n[19b] 画面合理性：题头不压字幕 / 夜文案不配白天户外');
+  {
+    // ① 开场 1.4 秒内：母题不许画字幕（题头在 H-34，daily 字幕在 H-72，实测骑在一起）
+    const spyT = stubCtx();
+    spyT.texts = [];
+    spyT.fillText = (t) => { spyT.texts.push(String(t)); };
+    const tf = {
+      title: '城市的一天', template: 'daily', palette: 'ink', bpm: 84, beats: 8, sub: 'on',
+      scenes: [{ title: '清晨的厨房', text: '锅里的水刚冒泡。' }]
+    };
+    FS.story.drawFrame(spyT, tf, 0.9);                 // t<1.4：题头在
+    const tEarly = spyT.texts.join('');
+    ok('开场 1.4 秒内母题不画字幕（片名题头独占画面）', tEarly.indexOf('锅里的水刚冒泡') < 0);
+    ok('开场 1.4 秒内片名题头在场', tEarly.indexOf('城市的一天') >= 0);
+    const spyT2 = stubCtx();
+    spyT2.texts = [];
+    spyT2.fillText = (t) => { spyT2.texts.push(String(t)); };
+    FS.story.drawFrame(spyT2, tf, 2.4);                // t>1.4：字幕该回来了
+    ok('1.4 秒后字幕正常出现（闸门会放行）', spyT2.texts.join('').indexOf('锅里的水刚冒泡') >= 0);
+
+    // ② 光线闸门：文案说夜，就不能给白天户外场景
+    const night = FS.s2dPick.pickScene('深夜的书桌，台灯把一小圈光钉在桌面上，其余的都交给了夜。', 7);
+    const DAY = ['park', 'seaside', 'campus', 'farmfield', 'balcony', 'busstop', 'street'];
+    ok('「深夜的书桌」不会被选成白天户外场景（实测曾落到公园）',
+      DAY.indexOf(night) < 0, '(得到 ' + night + ')');
+    // 但文案明说公园时不该被闸门拦
+    ok('「深夜的公园长椅」仍能选到公园（闸门只拦落表，不拦明说的地点）',
+      FS.s2dPick.pickScene('深夜的公园长椅', 7) === 'park',
+      '(得到 ' + FS.s2dPick.pickScene('深夜的公园长椅', 7) + ')');
+    // 夜里的书桌类文案能落到夜里成立的室内场景
+    ok('「深夜的书桌」落到室内夜景类场景',
+      ['study', 'bedroom', 'nightmarket', 'rainy', 'livingroom', 'cafe'].indexOf(night) >= 0);
+    // ③ 回归：光线词不许混进地点词表（否则会抢走后面的地点）
+    ok('「办公室加班到深夜」仍然是办公室（study 词表里不能有「深夜」）',
+      FS.s2dPick.pickScene('他在办公室加班到深夜', 3) === 'office',
+      '(得到 ' + FS.s2dPick.pickScene('他在办公室加班到深夜', 3) + ')');
+  }
+
+  /* ================================================================
+   * 3D 描边（线框）几何 —— 2026-10-05
+   * ⚠️ 这里的每条断言都对应一个实测踩过的坑，别当成「凑数」删掉。
+   * ================================================================ */
+  section('\n[19c] 3D 线条轮廓：抽边去重 + 着色器');
+  {
+    const G = FS.geom;
+    ok('FS.geom 导出了 edges / placeEdges', typeof G.edges === 'function' && typeof G.placeEdges === 'function');
+
+    // ① 去重必须按坐标而不是下标：box() 每个面 push 一组全新顶点，
+    //    按下标去重对它是「36 条棱」而不是 18 条（= 12 棱 + 6 面对角线）。
+    const box = G.box(1, 1, 1, [1, 0, 0]);
+    const eBox = G.edges(box);
+    ok('立方体抽边 = 18 条（12 棱 + 6 面对角线，不是 36）',
+      eBox.idx.length / 2 === 18, '(得到 ' + eBox.idx.length / 2 + '，tris=' + box.idx.length / 3 + ')');
+    ok('noDedup 模式给出未去重的 36 条（证明去重确实在起作用）',
+      G.edges(box, { noDedup: true }).idx.length / 2 === 36);
+
+    // ② 描边几何自洽：顶点数 == 索引数、idx 连续、法线非零、颜色在 [0,1]
+    const rng = FS.director.mkRng(FS.director.fnv('bedroom') ^ 0x9e37);
+    const b = FS.world.buildPlace('bedroom', rng.f);
+    const pe = G.placeEdges(b, { minLen: 0.004 });
+    ok('描边几何自洽（顶点数 == 索引数）', pe.pos.length / 3 === pe.idx.length,
+      '(' + pe.pos.length / 3 + ' vs ' + pe.idx.length + ')');
+    ok('描边索引连续（0..n-1 无洞）', (() => {
+      const seen = new Set(pe.idx);
+      return seen.size === pe.idx.length && Math.min(...pe.idx) === 0 && Math.max(...pe.idx) === pe.idx.length - 1;
+    })());
+    ok('描边没有零长线段（两端不会落在同一点）', (() => {
+      for (let i = 0; i < pe.idx.length; i += 2) {
+        const a = pe.idx[i], c = pe.idx[i + 1];
+        const d = Math.hypot(pe.pos[a * 3] - pe.pos[c * 3], pe.pos[a * 3 + 1] - pe.pos[c * 3 + 1],
+          pe.pos[a * 3 + 2] - pe.pos[c * 3 + 2]);
+        if (d < 1e-9) return false;
+      }
+      return true;
+    })());
+    ok('描边颜色分量都在 [0,1]（着色器直接拿它当输出）',
+      pe.col.every((v) => v >= 0 && v <= 1));
+    ok('描边法线非零（平均后不该出现零向量）', (() => {
+      for (let i = 0; i < pe.nrm.length; i += 3) {
+        if (pe.nrm[i] === 0 && pe.nrm[i + 1] === 0 && pe.nrm[i + 2] === 0) return false;
+      }
+      return true;
+    })());
+
+    // ③ 线框档确实比实体省：线段数应当明显少于三角形数 × 3
+    const tris = b.solid.idx.length / 3;
+    ok('线框比实体省几何（线段数 < 三角面数 × 3）', pe.idx.length / 2 < tris * 3,
+      '(' + pe.idx.length / 2 + ' 线段 vs ' + tris + ' 面)');
+    // 去重的核心不变量：**不存在重复边**。如果这里挂了，画出来就是
+    // 三倍亮度的粗线 + 斜面抖动（因为每条共享边被两个面各提交了一次）。
+    // ⚠️ 别去比「线段数 == 某个算出来的数」：placeEdges 合并了 solid+glow，
+    //   minLen 又会剪短边，数字对不上是正常的，重复才是真 bug。
+    ok('edges() 输出里没有任何一条重复边（同一对端点只出现一次）', (() => {
+      const got = new Set();
+      for (let i = 0; i < pe.idx.length; i += 2) {
+        const a = pe.idx[i], c = pe.idx[i + 1];
+        const k = a < c ? a + '_' + c : c + '_' + a;
+        if (got.has(k)) return false;
+        got.add(k);
+      }
+      return true;
+    })());
+    ok('去掉 minLen 后也仍然没有重复边（去重与剪边是两层独立的事）', (() => {
+      const all = G.placeEdges(b, {});
+      const got = new Set();
+      for (let i = 0; i < all.idx.length; i += 2) {
+        const a = all.idx[i], c = all.idx[i + 1];
+        const k = a < c ? a + '_' + c : c + '_' + a;
+        if (got.has(k)) return false;
+        got.add(k);
+      }
+      return true;
+    })());
+
+    // ④ minLen 真的在剪短线段
+    ok('minLen 能剪掉更短的线段', (() => {
+      const loose = G.placeEdges(b, { minLen: 0 });
+      const tight = G.placeEdges(b, { minLen: 0.5 });
+      return tight.idx.length <= loose.idx.length;
+    })());
+
+    // ④' 折痕过滤：剔掉「同一个平面内的三角化对角线」。
+    //     不剔的话地板/墙面上全是交叉线（实测出图确认），像毛线不像线稿。
+    ok('折痕过滤后立方体只剩 12 条真棱（去掉 6 条面对角线）',
+      G.edges(box, { creaseAngle: 18 }).idx.length / 2 === 12,
+      '(得到 ' + G.edges(box, { creaseAngle: 18 }).idx.length / 2 + ')');
+    ok('不传 creaseAngle 时保留全部 18 条（含对角线）', G.edges(box).idx.length / 2 === 18);
+    ok('阈值越大线越少（钝角被当成平面剔掉）', (() => {
+      const l = G.placeEdges(b, { minLen: 0.004, creaseAngle: 12 }).idx.length / 2;
+      const m = G.placeEdges(b, { minLen: 0.004, creaseAngle: 18 }).idx.length / 2;
+      const h = G.placeEdges(b, { minLen: 0.004, creaseAngle: 30 }).idx.length / 2;
+      return l > m && m > h;
+    })());
+    ok('折痕过滤确实大幅减线（客厅场景上千条 → 约七百）', (() => {
+      const all = G.placeEdges(b, { minLen: 0.004 }).idx.length / 2;
+      const cre = G.placeEdges(b, { minLen: 0.004, creaseAngle: 18 }).idx.length / 2;
+      return cre < all * 0.75 && all > 500;
+    })());
+    ok('渲染器实际用了 18° 折痕阈值（不是只写了个没人调的参数）',
+      /creaseAngle: 18/.test(require('fs').readFileSync(path.join(__dirname, '..', 'js', 'gl', 'render.js'), 'utf8')));
+    ok('折痕过滤后依然没有重复边（过滤不能破坏去重）', (() => {
+      const cre = G.placeEdges(b, { minLen: 0.004, creaseAngle: 18 });
+      const got = new Set();
+      for (let i = 0; i < cre.idx.length; i += 2) {
+        const a = cre.idx[i], c = cre.idx[i + 1];
+        const k = a < c ? a + '_' + c : c + '_' + a;
+        if (got.has(k)) return false;
+        got.add(k);
+      }
+      return true;
+    })());
+
+    // ⑤ placeEdges 不含 water（水面描出来是一堆重叠横线，反而脏）
+    ok('placeEdges 不把水面算进描边', (() => {
+      const only = G.placeEdges({ solid: b.solid, water: b.water, glow: b.glow }, { minLen: 0.004 });
+      const solidOnly = G.placeEdges({ solid: b.solid, glow: b.glow }, { minLen: 0.004 });
+      return only.idx.length === solidOnly.idx.length;
+    })());
+
+    // ⑥ 着色器源码级守卫：GLSL 只在运行时编译，node 里只能查结构
+    const rsrc = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'gl', 'render.js'), 'utf8');
+    ok('render.js 有线框专用着色器（不是把实体调暗）', /var VS_LINE = \[/.test(rsrc) && /var FS_LINE = \[/.test(rsrc));
+    ok('线框着色器不吃点光/法线（省掉光照计算 = 轻量的来源）',
+      (() => {
+        const m = rsrc.match(/var FS_LINE = \[([\s\S]*?)\]\.join/)[1];
+        return !/uLightPos/.test(m) && !/dot\(N/.test(m);
+      })());
+    ok('线框档不画水（水面是平的，描出来是一堆重叠横线）', /pm\.water && style !== 'line'/.test(rsrc));
+    ok('线框档先画一遍「消隐暗面」再画线（否则深度缓冲为空，背面的边全透出来）',
+      /uFill > 0\.5[\s\S]{0,200}frag = vec4\(0\.0, 0\.0, 0\.0, 1\.0\); return;/.test(rsrc) &&
+      /if \(style === 'line' && pm\.solid\)[\s\S]{0,300}uLine\.uFill, 1[\s\S]{0,900}drawLines\(gl, placeLines/.test(rsrc));
+    ok('消隐暗面有独立的角色通道（人物也要挡住线）', /drawCastFill\(shot, abs, local, cam\)/.test(rsrc));
+    ok('「轻量」是省掉光照而不是省掉深度（暗面走 uFill 早退分支，无点光/法线/雾）',
+      /if \(uFill > 0\.5\)[\s\S]{0,120}return;/.test(rsrc) &&
+      !/uFill[\s\S]{0,300}uLightPos/.test(rsrc.match(/var FS_LINE = \[[\s\S]*?\]\.join/)[1]));
+    ok('叠加档先画实体再画线（有面打底才看得出线在哪）',
+      /style === 'both' && pm\.solid\) GLC\.drawMesh/.test(rsrc));
+    ok('画线时关掉背面剔除（否则转一圈物体就缺边）',
+      /gl\.disable\(gl\.CULL_FACE\);[^]*?drawLines\(gl, placeLines\(pm\)\)/.test(rsrc));
+    ok('线框用 gl.LINES 而不是 TRIANGLES', /drawElements\(gl\.LINES/.test(
+      require('fs').readFileSync(path.join(__dirname, '..', 'js', 'gl', 'core.js'), 'utf8')));
+    ok('描边网格懒建（抽边只在切到线框时做，不预建）',
+      /m\.line !== undefined/.test(rsrc) && /if \(m\.line !== undefined\) return m\.line/.test(rsrc));
+    ok('描边网格也释放显存（进 disposeAll）', /disposeMesh\(gl, m\.line\)/.test(rsrc));
+    ok('描边与实体共用同一份角色世界变换（不会错位）',
+      /function castPose/.test(rsrc) && /drawCastLines[\s\S]{0,400}castPose\(shot, abs, local, cam\)/.test(rsrc));
+
+    // ⑦ UI：画质档位 + 快照带上（否则预览线框、导出实体）
+    const msrc = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8');
+    const mhtml = require('fs').readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+    ok('UI 有 3D 画质三档（线条 / 叠加 / 实体）',
+      /id="f-style"/.test(mhtml) && /value="line"/.test(mhtml) &&
+      /value="both"/.test(mhtml) && /value="solid"/.test(mhtml));
+    ok('画质栏只在 3D 引擎下显示', /f-style-row'\)\.hidden = \(v !== '3d'\)/.test(msrc));
+    ok('默认档是线条轮廓（轻量）', /<option value="line" selected>/.test(mhtml) ||
+      /<option value="line">线条轮廓/.test(mhtml));
+    ok('导出快照带上画质档（预览与导出一致）',
+      msrc.indexOf("style: ($('f-style') && $('f-style').value) || 'line'") >= 0 &&
+      msrc.indexOf('gl3d.setStyle(snap.style)') >= 0);
+  }
+
+  /* ================================================================
+   * 2D「让 AI 画这段」—— js/aiscene.js（2026-10-05）
+   * 这里的断言几乎每条都对应一个实测踩到的坑。
+   * ================================================================ */
+  section('\n[19d] AI 生成 2D 场景：沙箱 + 画笔清单');
+  {
+    const AS = FS.aiscene;
+    const A2 = FS.s2d;
+    ok('FS.aiscene 导出齐了（prompt/extract/lint/compile/smoke/register）',
+      AS && ['prompt', 'extract', 'lint', 'compile', 'smoke', 'register', 'unregister']
+        .every((k) => typeof AS[k] === 'function'));
+
+    /* ---------- ① 画笔清单必须与 core.js 真实签名一致 ----------
+     * ⚠️ 第一版清单是手写的，错了三处（building 的 windows/winCols、
+     *    particles 的 x0/y0/x1/y1、groundBand 的 hz/y0/y1），
+     *    结果「楼画出来了但一扇窗都没亮、粒子撒到画布外」。出图才发现。
+     *    所以这里把清单里出现的每个参数名拿去 core.js 源码里 grep，必须存在。 */
+    const coreSrc = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'scene2d', 'core.js'), 'utf8');
+    const docOpts = [
+      ['building', ['windows', 'winColor', 'lit', 'winCols', 'winRows', 'winW', 'winGap', 'depth', 'color']],
+      ['particles', ['x0', 'y0', 'x1', 'y1', 'n', 'color', 'size', 'alpha', 'speed', 'sway', 'shape']],
+      ['groundBand', ['hz', 'y0', 'y1', 'x0', 'x1', 'color']],
+      ['groundGrid', ['hz', 'vp', 'y0', 'rows', 'color', 'alpha', 'lw']],
+      ['personSil', ['x', 'baseY', 'h', 'color', 't', 'action']],
+      // ⚠️ catSil 是 s（缩放）不是 h；cup 是 o.steam:false 关热气，不是 steamOn。
+      //    这两个都是第一版清单里凭空编的字段名，测试当场抓出来。
+      ['catSil', ['x', 'baseY', 's', 'color', 't', 'action']],
+      ['sign', ['bg', 'fg', 'border', 'glowOn']],
+      ['text', ['align', 'weight', 'baseline', 'shadow', 'shadowA']],
+      ['cup', ['steam']]
+    ];
+    const docStr = AS.API_DOC;
+    const bad = [];
+    docOpts.forEach(([fn, keys]) => {
+      keys.forEach((k) => {
+        // 清单里写了 + core.js 源码里也得能搜到，两边都对才算没漂
+        if (docStr.indexOf(k) < 0) bad.push(fn + '.' + k + '(清单里没提)');
+        else if (coreSrc.indexOf(k) < 0) bad.push(fn + '.' + k + '(core.js 里没有)');
+      });
+    });
+    ok('画笔清单的参数名与 scene2d/core.js 逐条对齐（防漂移守卫）', bad.length === 0, bad.join(' / '));
+    ok('清单里点名的每个函数在 FS.s2d 上都真实存在', (() => {
+      const named = (docStr.match(/A\.([A-Za-z_][\w]*)/g) || [])
+        .map((s) => s.slice(2))
+        .filter((k, i, arr) => arr.indexOf(k) === i);
+      const missing = named.filter((k) => A2[k] === undefined);
+      return missing.length === 0;
+    })(), (docStr.match(/A\.([A-Za-z_][\w]*)/g) || []).map((s) => s.slice(2))
+      .filter((k, i, arr) => arr.indexOf(k) === i && A2[k] === undefined).join(','));
+    ok('building 的 lit 被说成「0~1 比例」而不是布尔（第一版写错，窗全不亮）',
+      /lit 是 0~1 的亮窗比例/.test(docStr));
+    ok('particles 的区域用 x0/y0/x1/y1 说明（第一版写 x/y/w/h，粒子撒出画布）',
+      /x0\/y0\/x1\/y1/.test(docStr));
+
+    /* ---------- ② extract：模型输出的各种脏形状都能抠出函数 ---------- */
+    const good = 'function(g,t,p){ var A=this; A.sky(g,[[0,"#fff"],[1,"#000"]],0,400); A.tree(g,300,500,200,{leaf:"#2a5"}); A.birdSil(g,800,200,1,"#fff"); }';
+    ok('extract 认得带 ```js 围栏 + 前言 + 后语的输出',
+      AS.extract('好的：\n```javascript\n' + good + '\n```\n希望有用').indexOf('function') === 0);
+    ok('extract 抠掉函数后面多写的代码（只留一个函数）', (() => {
+      const r = AS.extract(good + '\nvar x = 1;\nfunction other(){}');
+      return r.indexOf('var x') < 0 && r.indexOf('other') < 0;
+    })());
+    ok('extract 遇到没有 function 的输出会报错（不是静默返回空）', (() => {
+      try { AS.extract('var x = 1;'); return false; } catch (e) { return /找不到 function/.test(e.message); }
+    })());
+    ok('extract 遇到花括号不配平（输出被截断）会报错', (() => {
+      try { AS.extract('function(g,t,p){ var A=this; A.sky(g,[[0,"#fff"],[1,"#000"]],0,400);'); return false; }
+      catch (e) { return /没配平/.test(e.message); }
+    })());
+
+    /* ---------- ③ lint：死循环必须在**执行前**拦下 ----------
+     * ⚠️ 这里原来是「跑完再量耗时」，而 while(true) 根本不返回 →
+     *   node 进程被卡死 120s。所以防线改成静态检查。 */
+    const loops = [
+      ['while(true){}', 'function(g,t,p){ var A=this; while(true){} }'],
+      ['while(i<10)', 'function(g,t,p){ var A=this; var i=0; while(i<10){ i++; } A.sky(g,[[0,"#fff"],[1,"#000"]],0,400); }'],
+      ['for(;;){}', 'function(g,t,p){ var A=this; for(;;){ } }'],
+      ['for(;true;){}', 'function(g,t,p){ var A=this; for(;true;){ } }'],
+      ['for(条件变量不变)', 'function(g,t,p){ var A=this; var n=3; for(;n;){ } }'],
+      ['eval', 'function(g,t,p){ var A=this; eval("1"); }'],
+      ['new Function', 'function(g,t,p){ var A=this; new Function("return 1"); }']
+    ];
+    let loopLeak = 0;
+    loops.forEach(([nm, code]) => {
+      const t0 = Date.now();
+      let rejected = false;
+      try { AS.compile(code); } catch (e) { rejected = true; }
+      if (!rejected) loopLeak++;
+      // 静态检查必须是「瞬间」的；超过 50ms 说明它居然真去执行了
+      if (Date.now() - t0 > 50) loopLeak++;
+    });
+    ok('七种死循环/逃逸写法全部被静态检查拒掉（且都在 50ms 内，不执行）', loopLeak === 0);
+    ok('合法的 for 循环不被误拒',
+      (() => { try { AS.compile('function(g,t,p){ var A=this; for(var i=0;i<5;i++){ A.tree(g,i*100,500,100,{leaf:"#2a5"}); } }'); return true; } catch (e) { return false; } })());
+    ok('源码里不再有「跑完再量耗时」那种无效的超时判断（那个拦不住 while(true)）',
+      !/dt > \d+/.test(require('fs').readFileSync(path.join(__dirname, '..', 'js', 'aiscene.js'), 'utf8')));
+
+    /* ---------- ④ compile 包装层：形参必须列全 ---------- */
+    // 踩过的坑：写成 new Function('A', '...g, t, p...') 而没把 g/t/p 声明为形参
+    ok('compile 后的绘制器能真的画（不是「g is not defined」）', (() => {
+      const fn = AS.compile(good);
+      const g = AS.probeCtx();
+      fn(g, 0.5, 0.5);
+      return g.calls > 3;
+    })());
+    ok('compile 报语法错时给的是人话（不是裸的 Unexpected token）', (() => {
+      try { AS.compile('function(g,t,p){ var A=this; A.sky(g,[[0,"#fff"],0,400); }'); return false; }
+      catch (e) { return /语法错/.test(e.message); }
+    })());
+
+    /* ---------- ⑤ smoke：能识别「等于什么都没画」 ---------- */
+    ok('空函数被拒（画面等于没画）', (() => {
+      const fn = AS.compile('function(g,t,p){ var A=this; }');
+      return AS.smoke(fn).ok === false;
+    })());
+    ok('只用 arc/lineTo 画东西也算画了（第一版只数 fillRect，树/鸟全被漏掉）', (() => {
+      const fn = AS.compile('function(g,t,p){ var A=this; g.beginPath(); g.moveTo(0,0); g.lineTo(100,100); g.lineTo(200,0); g.stroke(); g.beginPath(); g.arc(50,50,20,0,6.28); g.fill(); g.beginPath(); g.arc(90,60,20,0,6.28); g.fill(); }');
+      return AS.smoke(fn).ok === true;
+    })());
+    ok('引用不存在的画笔会被抓出来（给的是人话）', (() => {
+      const fn = AS.compile('function(g,t,p){ var A=this; A.不存在的画笔(g,1,2,3); }');
+      const r = AS.smoke(fn);
+      return r.ok === false && /抛错/.test(r.reason);
+    })());
+
+    /* ---------- ⑥ register：进场景池后与手写场景同一时间轴 ---------- */
+    ok('register 之后场景进池且标记为 AI 生成', (() => {
+      const r = AS.register('ai-test', good, { name: 'AI·测试' });
+      return FS.s2dScenes['ai-test'] && AS.isAi('ai-test') && FS.s2dScenes.meta['ai-test'].ai === true;
+    })());
+    ok('AI 场景能被 daily 母题真的画出来（走完整 drawFrame 链路）', (() => {
+      const st = {
+        title: 't', template: 'daily', palette: 'ink', bpm: 84, beats: 8, sub: 'on',
+        scenes: [{ title: 'AI 段', text: '一段用来验证 AI 场景的文案。' }], scenes2d: ['ai-test']
+      };
+      const g = AS.probeCtx();
+      g.canvas = { width: 1280, height: 720 };
+      let err = null;
+      try { FS.story.drawFrame(g, st, 2.0); } catch (e) { err = e; }
+      return !err && g.calls > 10;
+    })());
+    ok('unregister 能撤回（用户点「换一版」要能回到上一版）', (() => {
+      AS.register('ai-tmp', good, {});
+      const had = !!FS.s2dScenes['ai-tmp'];
+      AS.unregister('ai-tmp');
+      return had && !FS.s2dScenes['ai-tmp'] && !AS.isAi('ai-tmp');
+    })());
+    ok('源码可取回（导出项目时带上，复现得出来）', AS.codeOf('ai-test') === good);
+    AS.unregister('ai-test');
+
+    /* ---------- ⑦ UI 接线 ---------- */
+    const mhtml2 = require('fs').readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+    const msrc2 = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8');
+    ok('index.html 加载了 aiscene.js', /js\/aiscene\.js\?v=/.test(mhtml2));
+    ok('UI 有「让 AI 画这段」与「清除 AI 场景」', /id="f-ai-paint"/.test(mhtml2) && /id="f-ai-clear"/.test(mhtml2));
+    ok('AI 画场景那行只在 2D 生活场景母题下出现',
+      /aiRow\.hidden = !isDaily/.test(msrc2));
+    ok('AI 场景盖在自动选景之上（改文案不会被弹回手写场景）',
+      /film\.aiScenes/.test(msrc2) && /film\.scenes2d\[i\] = film\.aiScenes\[k\]/.test(msrc2));
+    ok('AI 失败时保留手写场景，绝不开天窗', (() => {
+      // catch 分支里必须 unregister + 保留原 scenes2d（不是把这一段置空）
+      const c = msrc2.match(/\['catch'\]\(function \(e\) \{[\s\S]{0,500}?\}\)\['finally'\]/);
+      return c && /aiscene\.unregister/.test(c[0]) && /已保留原来的手写场景/.test(c[0]);
+    })());
+    ok('没填 Key 时直说人话而不是发一个必然失败的请求',
+      /还没填 API Key/.test(msrc2));
+  }
 
   section('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败');
     process.exit(fail ? 1 : 0);

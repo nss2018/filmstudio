@@ -59,7 +59,11 @@
       ['nightmarket', ['夜市', '摊位', '灯笼', '小吃', '夜市']],
       ['seaside', ['海边', '沙滩', '海浪', '大海', '礁石', '椰子']],
       ['park', ['公园', '草地', '长椅', '林荫', '草坪']],
-      ['study', ['书房', '书架', '阅读', '学习', '看书']],
+      // ⚠️ 别把「深夜/夜里/台灯」这类**光线词**放进 study 的词表：ALIAS 是从上往下
+      //   线性匹配、首个命中就返回，而 study 排在 office 之前 ——
+      //   「他在办公室加班到深夜」会被 深夜 抢走判成书房（实测踩过）。
+      //   光线由下面的「光线闸门」统一处理，不混进地点词表。
+      ['study', ['书房', '书架', '阅读', '学习', '看书', '书桌', '写字', '论文', '稿子', '挑灯']],
       ['cafe', ['咖啡', '拿铁', '吧台', '烘焙']],
       ['street', ['街道', '马路', '大楼', '霓虹', '都市']],
       // ---- 第二批生活场景（scenes3.js 已补画 2D 版）----
@@ -77,6 +81,7 @@
     }
 
     // ② 复用 3D 导演层的加权词典（与 3D 完全一致的判断）
+    var fromDict = '';
     if (FS.director && FS.director.readText && FS.director.PLACE_WORDS) {
       var read = FS.director.readText([text || '']);
       if (read.place && read.place.length) {
@@ -84,15 +89,48 @@
         //    文案命中 kitchen(3D 有) / lab(3D 有) 时 2D 画不出来，得退到下一个画得出的场景。
         for (var i = 0; i < read.place.length; i++) {
           var id2d = TO_2D[read.place[i].id] || FALLBACK[read.place[i].id] || read.place[i].id;
-          if (has[id2d]) return id2d;
+          if (has[id2d]) { fromDict = id2d; break; }
         }
       }
     }
+    if (fromDict) return fromDict;
 
-    // ③ 兜底别名（第一轮没命中时用短词再试一次）
+    /* ------------------------------------------------------------------
+     *  ②' 光线闸门（2026-10-05 修「取材不合理」的真 bug）
+     *
+     *  实测出图的坑：「深夜的书桌 / 台灯把一小圈光钉在桌面上」这段，
+     *  文案里**一个地点词都没有**（书桌、台灯都不在任何别名表里），
+     *  于是走 ③ 落表按 hash 随机 → 挑了「公園」—— 一个绿树蓝天的大白天公园。
+     *  文字在说深夜，镜头给的是午后，这片子一眼就假。
+     *
+     *  所以在落表之前先判光线：文案说夜/暗/室内，就别给白天的户外场景。
+     *  判据是「有没有被明说成户外白天」，不是查场景的调色板（那要跑一遍才知道）。
+     *  ⚠️ 命中闸门时**只在合规的候选里**落表，不是直接指定某一个 ——
+     *     这样「深夜的公园」仍然能落到 park（文案明说了公园就不该被拦），
+     *     而「深夜的书桌」会落到 study/bedroom/nightmarket 这类夜里成立的场景。
+     * ------------------------------------------------------------------ */
+    var NIGHT = ['深夜', '夜里', '夜晚', '晚上', '凌晨', '半夜', '午夜', '入夜', '夜色', '月亮', '台灯', '被窝', '加班到'];
+    var wantsDark = NIGHT.some(function (w) { return t0.indexOf(w) >= 0; });
+    // 户外白天场景：给它们排到夜里就穿帮（但文案明说公园/海边时不该被拦，故先看地点词）
+    var OUTDOOR_DAY = { park: 1, seaside: 1, campus: 1, farmfield: 1, balcony: 1, busstop: 1, street: 1 };
+    if (wantsDark) {
+      var nightOK = ids0(has).filter(function (k) { return !OUTDOOR_DAY[k]; });
+      if (nightOK.length) {
+        var h = FS.director ? FS.director.fnv(text || 'x') : nightOK.length;
+        return nightOK[h % nightOK.length];
+      }
+    }
+
     // ③ 落表：稳定可复现
-    var ids = Object.keys(R).filter(function (k) { return has[k]; });
+    var ids = ids0(has);
     return ids[(FS.director ? FS.director.fnv(text || 'x') : ids.length) % ids.length];
+  }
+
+  /** 画得出的场景 id 列表（按注册顺序，稳定） */
+  function ids0(has) {
+    var out = [];
+    for (var k in has) if (has[k]) out.push(k);
+    return out;
   }
 
   /** 为整部片子选场景：每段一个（可手动覆盖）

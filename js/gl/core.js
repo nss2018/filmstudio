@@ -249,6 +249,23 @@
     gl.drawElements(gl.TRIANGLES, m.count, m.type, 0);
   }
 
+  /** 描边几何上传。**顶点布局跟三角面完全一样**（STRIDE=9），所以复用 upload()，
+   *  只是一个独立函数名 —— 调用方心智上更容易分清「这是线不是面」，
+   *  将来真要改线专用格式（比如带每端 uv 做端点淡化）时也只动这一处。 */
+  function uploadLines(gl, geo) {
+    var m = upload(gl, geo);
+    if (m) m.isLines = true;
+    return m;
+  }
+
+  /** 画描边。用 gl.LINES，深度测试照常开（线要能被面挡住），
+   *  但关掉 CULL_FACE —— 背面轮廓线也要画，否则转一圈物体就「缺边」。 */
+  function drawLines(gl, m) {
+    if (!m || !m.count) return;
+    gl.bindVertexArray(m.vao);
+    gl.drawElements(gl.LINES, m.count, m.type, 0);
+  }
+
   function disposeMesh(gl, m) {
     if (!m) return;
     gl.deleteVertexArray(m.vao);
@@ -305,6 +322,8 @@
     compileShader: compileShader,
     upload: upload,
     drawMesh: drawMesh,
+    uploadLines: uploadLines,
+    drawLines: drawLines,
     disposeMesh: disposeMesh,
     createTarget: createTarget,
     createFullscreen: createFullscreen

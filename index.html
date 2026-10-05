@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>科普宣传片工坊 · 配乐 + 渲染，一处出片</title>
-<link rel="stylesheet" href="css/app.css?v=20261005o">
+<link rel="stylesheet" href="css/app.css?v=20261005p">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
@@ -234,6 +234,14 @@
               <option value="3d">3D 生活场景（WebGL，人物 + 动物）</option>
             </select>
           </label>
+          <label class="fl" id="f-style-row" hidden>3D 画质
+            <select id="f-style">
+              <option value="line">线条轮廓（轻量 · 只画边不画面）</option>
+              <option value="both">线条 + 实体叠加</option>
+              <option value="solid">实体着色（体积感最足）</option>
+            </select>
+            <span class="mono dim" id="f-style-tip" hidden>线条轮廓：只画边、不画面，最轻</span>
+          </label>
           <span class="mono dim" id="f-engine-tip">2D 母题适合讲道理，3D 适合讲生活</span>
         </div>
         <label class="fl">片名<input type="text" id="f-title" value="群论：结构之美"></label>
@@ -260,6 +268,16 @@
         <div class="field-row" id="f-scene-row" hidden>
           <label class="fl">场景（每段一个，可手动覆盖）<select id="f-scene"></select></label>
           <button id="f-scene-auto" class="btn ghost"><svg class="ico"><use href="#i-dice"/></svg>按文案自动选</button>
+        </div>
+        <div class="field-row" id="f-aiscene-row" hidden>
+          <label class="fl">AI 画场景
+            <select id="f-ai-scene">
+              <option value="">选一段…</option>
+            </select>
+          </label>
+          <button id="f-ai-paint" class="btn"><svg class="ico"><use href="#i-film"/></svg>让 AI 画这段</button>
+          <button id="f-ai-clear" class="btn ghost" title="删掉所有 AI 画的场景，回到手写场景">清除 AI 场景</button>
+          <span class="mono dim" id="f-ai-status">让模型按这一段的文案直接写绘制代码；画不好会自动退回手写场景。</span>
         </div>
         <div class="field-row" id="f-2d-row">
           <label class="fl">视觉母题
@@ -297,9 +315,17 @@
           <label>BPM <input type="number" id="f-bpm" value="84" min="40" max="200"></label>
           <label>每段拍数 <input type="number" id="f-beats" value="8" min="2" max="32"></label>
           <label>字幕 <select id="f-sub"><option value="on">开</option><option value="off">关</option></select></label>
-          <label>配音 <select id="f-voice"><option value="zh-CN-YunxiNeural" selected>云希·男</option><option value="">无（不出人声）</option><option value="zh-CN-XiaoxiaoNeural">晓晓·女</option><option value="zh-CN-YunyangNeural">云扬·播音</option></select></label>
+          <label class="fl">成片声音
+            <select id="f-audmode">
+              <option value="music" selected>纯音乐（无人声，字幕自己读）</option>
+              <option value="both">人声 + 配乐</option>
+              <option value="voice">纯人声（不配乐）</option>
+              <option value="mute">全静音（只出画面）</option>
+            </select>
+          </label>
         </div>
         <div class="row-gap" style="margin-top:10px">
+          <label class="fl">配音音色 <select id="f-voice"><option value="zh-CN-YunxiNeural">云希·男</option><option value="zh-CN-XiaoxiaoNeural">晓晓·女</option><option value="zh-CN-YunyangNeural">云扬·播音</option><option value="zh-CN-XiaoyiNeural">晓伊·亲和</option></select></label>
           <label class="chk"><input type="checkbox" id="f-music" checked> 自动生成配乐</label>
           <button id="f-newmusic" class="btn ghost"><svg class="ico"><use href="#i-music"/></svg>按片名现生成一首</button>
         </div>
@@ -351,30 +377,32 @@
   <span class="mono" id="probe-badge"></span>
 </footer>
 
-<script src="js/theme.js?v=20261005o"></script>
-<script src="js/score.js?v=20261005o"></script>
-<script src="js/wav.js?v=20261005o"></script>
-<script src="js/synth.js?v=20261005o"></script>
-<script src="js/story.js?v=20261005o"></script>
-<script src="js/factory.js?v=20261005o"></script>
-<script src="js/gl/core.js?v=20261005o"></script>
-<script src="js/gl/lru.js?v=20261005o"></script>
-<script src="js/gl/geom.js?v=20261005o"></script>
-<script src="js/gl/camera.js?v=20261005o"></script>
-<script src="js/gl/world.js?v=20261005o"></script>
-<script src="js/gl/cast.js?v=20261005o"></script>
-<script src="js/gl/render.js?v=20261005o"></script>
-<script src="js/director.js?v=20261005o"></script>
-<script src="js/gl/world2.js?v=20261005o"></script>
-<script src="js/gl/world3.js?v=20261005o"></script>
-<script src="js/scene2d/core.js?v=20261005o"></script>
-<script src="js/scene2d/scenes.js?v=20261005o"></script>
-<script src="js/scene2d/scenes2.js?v=20261005o"></script>
-<script src="js/scene2d/scenes3.js?v=20261005o"></script>
-<script src="js/scene2d/pick.js?v=20261005o"></script>
-<script src="js/roll.js?v=20261005o"></script>
-<script src="js/scoresync.js?v=20261005o"></script>
-<script src="js/script.js?v=20261005o"></script>
-<script src="js/main.js?v=20261005o"></script>
+<script src="js/type.js?v=20261005p"></script>
+<script src="js/aiscene.js?v=20261005p"></script>
+<script src="js/theme.js?v=20261005p"></script>
+<script src="js/score.js?v=20261005p"></script>
+<script src="js/wav.js?v=20261005p"></script>
+<script src="js/synth.js?v=20261005p"></script>
+<script src="js/story.js?v=20261005p"></script>
+<script src="js/factory.js?v=20261005p"></script>
+<script src="js/gl/core.js?v=20261005p"></script>
+<script src="js/gl/lru.js?v=20261005p"></script>
+<script src="js/gl/geom.js?v=20261005p"></script>
+<script src="js/gl/camera.js?v=20261005p"></script>
+<script src="js/gl/world.js?v=20261005p"></script>
+<script src="js/gl/cast.js?v=20261005p"></script>
+<script src="js/gl/render.js?v=20261005p"></script>
+<script src="js/director.js?v=20261005p"></script>
+<script src="js/gl/world2.js?v=20261005p"></script>
+<script src="js/gl/world3.js?v=20261005p"></script>
+<script src="js/scene2d/core.js?v=20261005p"></script>
+<script src="js/scene2d/scenes.js?v=20261005p"></script>
+<script src="js/scene2d/scenes2.js?v=20261005p"></script>
+<script src="js/scene2d/scenes3.js?v=20261005p"></script>
+<script src="js/scene2d/pick.js?v=20261005p"></script>
+<script src="js/roll.js?v=20261005p"></script>
+<script src="js/scoresync.js?v=20261005p"></script>
+<script src="js/script.js?v=20261005p"></script>
+<script src="js/main.js?v=20261005p"></script>
 </body>
 </html>

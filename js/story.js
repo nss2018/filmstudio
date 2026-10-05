@@ -200,10 +200,40 @@
     return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
   }
 
-  /** 字幕：开了 sub 才画，超长自动缩字号（最多两行），返回占了几行 */
-  function sub(g, story, sc, cx, y, maxW, basePx, weight) {
+  /** 开场题头期间为真：这 1.4 秒里母题不画字幕（见 drawFrame）。
+   *  提到模块级是因为母题函数在 drawFrame 内部被调用，题头那段代码在母题之后 ——
+   *  想让「后面画的字不压前面的字」，只能提前设好一个闸门。 */
+  var openingTitle = '';
+
+  /** 字幕：开了 sub 才画，超长自动缩字号（最多两行），返回占了几行
+   *
+   *  2026-10-05：这一层改走 FS.type.subtitle（新增的排版模块）。
+   *  以前是「量宽 → 缩字号 → 一次性 fillText」，所以字幕是死的：
+   *  整段 5 秒里字一个不动，像 PPT 截图。现在按 FS.type 的排版语言出：
+   *    · 逐字错开入场（按字数 stagger，每字从下方滑上来）
+   *    · 底部托底暗带（带高按实际行数算，不再一律 230px 吃掉一块画面）
+   *    · 关键词点亮（书名号里的词 / 数字 / 英文缩写）
+   *  o.p 缺省 = 1（整句已完成），所以**不传 p 的老调用点行为不变**；
+   *  逐段淡入需要 o.p，母题里把段内进度 p 传进来即可。
+   *  o.band === false 时不铺带（daily 母题自己已经铺了一条）。
+   */
+  function sub(g, story, sc, cx, y, maxW, basePx, weight, o) {
     if (story.sub === 'off' || !sc.text) return 0;
+    if (openingTitle) return 0;                     // 片名题头期间把画面让给它
     var c = pal(story.palette);
+    o = o || {};
+    if (FS.type) {
+      return FS.type.subtitle(g, sc.text, cx, y, {
+        p: o.p === undefined ? 1 : o.p,
+        size: basePx, weight: weight || 400, maxW: maxW,
+        color: c.text, highlight: c.main,
+        off: false, alpha: o.alpha,
+        band: o.band === false ? false : (o.band || {}),
+        W: W, H: H,
+        words: o.words || (o.autoWords === false ? null : FS.type.keywords(sc.text, 3))
+      });
+    }
+    // 没有排版模块时的老路径（保留兜底，别让整段母题挂掉）
     var px = basePx, w = weight || 400, lines;
     g.font = font(px, w);
     lines = wrapText(g, sc.text, maxW);
@@ -330,7 +360,7 @@
       g.globalAlpha = alpha * smooth(p * 5) * smooth((1 - p) * 7);
       // 字幕挪到卡片上方那条带子里，不再被圆环压住；
       // y 从 cy+262 收到 cy+236，给底部片名题头（H-34≈686）让出安全距离。
-      sub(g, story, sc, cx, cy + 236, W - 300, 29, 500);
+      sub(g, story, sc, cx, cy + 236, W - 300, 29, 500, { p: p, band: false });
     }
 
     // 段落序号
@@ -404,7 +434,7 @@
       // ⚠️ 原来 y=cy+118，字幕两行时上沿正好压住还在逐字揭示的字符（截图里糊成一团）。
       // 下移到 cy+172，并要求逐字揭示过半才淡入。
       g.globalAlpha = alpha * smooth((p - .45) * 4);
-      sub(g, story, sc, cx, cy + 172, W - 300, 28, 400);
+      sub(g, story, sc, cx, cy + 172, W - 300, 28, 400, { p: p, band: false });
     }
     g.restore();
   }
@@ -462,7 +492,7 @@
     g.fillText(story.title || '', W / 2, 150);
     if (sc.text) {
       g.globalAlpha = alpha * smooth((p - .2) * 4);
-      sub(g, story, sc, W / 2, 230, W - 200, 26, 400);
+      sub(g, story, sc, W / 2, 230, W - 200, 26, 400, { p: p, band: false });
     }
     g.restore();
   }
@@ -551,7 +581,7 @@
     }
 
     g.globalAlpha = alpha * smooth((p - .3) * 3.5);
-    sub(g, story, sc, W / 2, H - 84, W - 300, 26, 400);
+    sub(g, story, sc, W / 2, H - 84, W - 300, 26, 400, { p: p });
     g.restore();
   }
 
@@ -618,7 +648,7 @@
     g.beginPath(); g.moveTo(cx - 80, 118); g.lineTo(cx + 80, 118); g.stroke();
     g.globalAlpha = alpha;
     g.fillStyle = c.dim;
-    sub(g, story, sc, cx, H - 96, W - 420, 24, 400);
+    sub(g, story, sc, cx, H - 96, W - 420, 24, 400, { p: p });
     g.restore();
   }
 
@@ -668,8 +698,20 @@
       g.fillText('场景 · ' + meta.name, W - 16, 28);
       g.restore();
     }
-    // 段标题（小字，左上）
-    if (sc.title) {
+    // 段标题（kicker：小字 + 大字距 + 前面一条短横线）
+    // 以前是 30px 常规字重的 fillText，和正文一样重 → 层级分不出来，一眼看去
+    // 「标题」和「字幕」差不多大。改走 FS.type.kicker：等宽小字 + 0.34em 字距 +
+    // 左侧生长短横线，这是「有设计的版式」和「默认样式」最明显的差别。
+    if (sc.title && FS.type) {
+      var kc = pal(story.palette);
+      g.save();
+      g.globalAlpha = alpha;
+      FS.type.kicker(g, sc.title, 56 + 16 * 1.5, 66, {
+        p: clamp01(p / 0.30), size: 16, color: kc.text,
+        tracking: 16 * 0.30, baseline: 'alphabetic', align: 'left'
+      });
+      g.restore();
+    } else if (sc.title) {
       g.save();
       g.globalAlpha = alpha * 0.9;
       g.font = font(30, 600);
@@ -694,7 +736,7 @@
       g.restore();
       g.save();
       g.globalAlpha = alpha * smooth(p * 5);   // 段内前 0.2 拍淡入，别跟场景抢镜
-      sub(g, story, sc, W / 2, H - 72, W - 300, 31, 600);
+      sub(g, story, sc, W / 2, H - 72, W - 300, 31, 600, { p: p, band: false });
       g.restore();
     }
   }
@@ -719,6 +761,11 @@
 
     backdrop(g, story, t, p);
 
+    // ★ 开场 1.4 秒让给片名题头：这期间母题里**不画字幕**。
+    //   母题函数在上面已经画完了字幕、题头在后面才画，所以必须提前把闸门关上
+    //   （以前只在注释里写「这 1.4 秒不画别的字」，代码没做 → 截图里两层字骑在一起）。
+    openingTitle = (t < 1.4 && story.title) ? story.title : '';
+
     var fn = TEMPLATES[story.template] || drawConcept;
     var alpha = 1;
     var fadeIn = smooth(local / 0.28);
@@ -732,7 +779,12 @@
     //   改到底部也不行：concept 字幕在 cy+262≈622、题头原定 H-118≈602，只差 20px 照样叠。
     //   正解：题头放在**进度线正上方的空档**（H-30 往上、进度线在 H-6），
     //   并且这 1.4 秒内不画任何别的字——把整段开头让给它。
-    if (t < 1.4 && story.title) {
+    //
+    // ⚠️⚠️ 2026-10-05 补上「不画别的字」这半句（以前只是注释里写着，代码没做）：
+    //   daily 母题的字幕在 H-72，题头在 H-34，只差 38px 而字号 34 —— 实测截图里
+    //   「城市的一天」正好骑在字幕上（t≈1.26s 那帧）。所以题头在时把母题的字幕压掉
+    //   （闸门在 drawFrame 里母题函数之前就关上了，见 openingTitle）。
+    if (openingTitle) {
       var c = pal(story.palette);
       g.save();
       g.globalAlpha = smooth(t / 0.6) * smooth((1.4 - t) / 0.5);
@@ -747,7 +799,7 @@
       g.fillStyle = c.text;
       g.font = font(34, 700);
       g.shadowColor = hexA(c.main, .55); g.shadowBlur = 16;
-      g.fillText(story.title, W / 2, ty);
+      g.fillText(openingTitle, W / 2, ty);
       g.restore();
     }
 

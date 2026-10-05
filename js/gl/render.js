@@ -72,8 +72,53 @@
     '}'
   ].join('\n');
 
-  var VS_FULL = [
+  /* ---------------- 描边（线框）专用着色器 ----------------
+   * 为什么不给线单独一套光照：线框风格的视觉重心是「轮廓的干净」，
+   * 不是「体积感」。所以线只吃两个东西 —— 顶色 + 距离雾（远线淡出、近线实），
+   * 再叠一个随时间缓慢流动的微光 uPulse，让画面在只有线的时候也不死。
+   * 顶点格式跟三角面一样（aPos/aNormal/aColor），upload() 可以直接复用。 */
+  var VS_LINE = [
     '#version 300 es',
+    'in vec3 aPos; in vec3 aNormal; in vec3 aColor;',
+    'uniform mat4 uProj, uView, uModel;',
+    'out vec3 vColor, vWorld;',
+    'void main(){',
+    '  vec4 wp = uModel * vec4(aPos, 1.0);',
+    '  vWorld = wp.xyz;',
+    '  vColor = aColor;',
+    '  gl_Position = uProj * uView * wp;',
+    '}'
+  ].join('\n');
+
+  var FS_LINE = [
+    '#version 300 es',
+    'precision highp float;',
+    'in vec3 vColor, vWorld;',
+    'uniform vec3 uCamPos, uTint, uLineColor;',
+    'uniform float uFogNear, uFogFar, uAlpha, uTime, uPulse, uLineMix, uFill;',
+    'out vec4 frag;',
+    'void main(){',
+    // uFill=1 → 这是「消隐用的暗面」：不上色、不算光，只写深度。
+    //   纯线框如果真的一个面都不画，深度缓冲是空的 → 所有背面的边都透出来，
+    //   画面变成一团毛线（实测出图确认过）。所以线框档仍然画一遍面，
+    //   但走的是这个「只写深度」的极简分支 —— 没有任何点光/法线/半兰伯特计算，
+    //   这才是「轻量」的来源（省的是光照，不是深度）。
+    '  if (uFill > 0.5) { frag = vec4(0.0, 0.0, 0.0, 1.0); return; }',
+    // uLineMix=0 → 用物体本色；1 → 统一成 uLineColor（更「图纸」）
+    '  vec3 base = mix(vColor, uLineColor, uLineMix);',
+    // 沿世界坐标做一点缓慢起伏，让线面呼吸（振幅很小，只在暗处看得出）
+    '  float w = sin(vWorld.x * 0.9 + uTime * 0.7) * 0.5 + sin(vWorld.y * 1.3 - uTime * 0.5) * 0.5;',
+    '  vec3 col = base * (1.0 + w * 0.10 * uPulse);',
+    '  float d = length(uCamPos - vWorld);',
+    '  float f = clamp((d - uFogNear) / max(uFogFar - uFogNear, 0.001), 0.0, 1.0);',
+    // 远线淡出而不是被雾色吃掉 —— 线框画面里雾色会把轮廓糊成一坨
+    '  col *= (1.0 - f * 0.72);',
+    '  col *= uTint;',
+    '  frag = vec4(col, uAlpha * (1.0 - f * 0.45));',
+    '}'
+  ].join('\n');
+
+  var VS_FULL = [    '#version 300 es',
     'in vec2 aPos;',
     'out vec2 vUv;',
     'void main(){ vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }'
@@ -146,6 +191,7 @@
     var out = out2d || null;
 
     var progMain = GLC.createProgram(gl, VS_MAIN, FS_MAIN, 'main');
+    var progLine = GLC.createProgram(gl, VS_LINE, FS_LINE, 'line');
     var progSky = GLC.createProgram(gl, VS_FULL, FS_SKY, 'sky');
     var progBright = GLC.createProgram(gl, VS_FULL, FS_BRIGHT, 'bright');
     var progBlur = GLC.createProgram(gl, VS_FULL, FS_BLUR, 'blur');
@@ -164,6 +210,8 @@
     }
     var uMain = uloc(progMain, ['uProj', 'uView', 'uModel', 'uNormalMat', 'uLightPos[0]', 'uLightColor[0]',
       'uLightCount', 'uAmbient', 'uFogColor', 'uCamPos', 'uTint', 'uFogNear', 'uFogFar', 'uEmissive', 'uTime', 'uWave', 'uAlpha']);
+    var uLine = uloc(progLine, ['uProj', 'uView', 'uModel', 'uCamPos', 'uTint', 'uLineColor',
+      'uFogNear', 'uFogFar', 'uAlpha', 'uTime', 'uPulse', 'uLineMix', 'uFill']);
     var uSky = uloc(progSky, ['uTop', 'uBottom']);
     var uBright = uloc(progBright, ['uTex', 'uThreshold']);
     var uBlur = uloc(progBlur, ['uTex', 'uDir']);
@@ -186,11 +234,26 @@
       GLC.disposeMesh(gl, m.solid);
       GLC.disposeMesh(gl, m.water);
       GLC.disposeMesh(gl, m.glow);
+      GLC.disposeMesh(gl, m.line);          // 描边网格也要释放（显存不是 JS 对象）
+      if (m.lines) m.lines.forEach(function (x) { GLC.disposeMesh(gl, x); });
       if (m.meshes) m.meshes.forEach(function (x) { GLC.disposeMesh(gl, x); });
     }
 
     var placeCache = FS.LRU(PLACE_MAX, function (k, m) { disposeAll(m); });
     var castCache = FS.LRU(CAST_MAX, function (k, m) { disposeAll(m); });
+
+    /** 描边网格**懒建**：只有切到线框模式时才抽边。
+     *  为什么不一次性建好：抽边是一次纯 CPU 的 O(三角形数) 遍历 + 哈希去重，
+     *  20 个场景全建一遍在低端机上会明显卡一下；而大部分人一辈子只用实体模式。
+     *  建过一次就缓存住（挂在 pm.line / cm.lines 上），来回切模式不再重算。 */
+    function placeLines(m) {
+      if (m.line !== undefined) return m.line;
+      // creaseAngle 18°：剔掉「同一个平面内的三角化对角线」。
+      // 不剔的话地板/墙面上全是交叉线（实测出图确认），像毛线不像线稿。
+      var eg = FS.geom.placeEdges(m.info, { minLen: 0.004, creaseAngle: 18 });
+      m.line = (eg && eg.idx.length) ? GLC.uploadLines(gl, eg) : null;
+      return m.line;
+    }
 
     function placeMesh(placeId, seed) {
       var key = placeId + '#' + seed;
@@ -214,11 +277,25 @@
       var inst = FS.cast.instantiate(castId, rng.f, 'a');
       if (!inst) return null;
       var parts = inst.parts.map(function (p) { return GLC.upload(gl, p.geo); });
-      return castCache.set(key, { inst: inst, meshes: parts });
+      // 原始 geo 留着：描边要**懒建**（只切线框时才抽边），而抽边必须从 geo 出发，
+      // 已上传的 mesh 里拿不回顶点数组了。
+      return castCache.set(key, { inst: inst, meshes: parts, geos: inst.parts.map(function (p) { return p.geo; }) });
+    }
+
+    /** 角色描边：每个部件一条线网格，按需建、建过就缓存 */
+    function castLines(m) {
+      if (m.lines) return m.lines;
+      m.lines = (m.geos || []).map(function (geo) {
+        if (!geo || !geo.idx || !geo.idx.length) return null;
+        var eg = FS.geom.edges(geo, { minLen: 0.004, creaseAngle: 18 });
+        return eg.idx.length ? GLC.uploadLines(gl, eg) : null;
+      });
+      return m.lines;
     }
 
     /* ---------- 一帧 ---------- */
     var subOn = true;                      // 字幕开关（setSubtitles 改它）
+    var style = 'solid';                   // 画质档：solid | line | both（setStyle 改它）
     var engine = {
       gl: gl,
       storyboard: null,
@@ -227,6 +304,15 @@
 
       setStoryboard: function (sb) { engine.storyboard = sb; },
       setSubtitles: function (on) { subOn = !!on; },
+
+      /** 切 3D 画质：'solid' 实体 / 'line' 纯线框 / 'both' 线框+实体。
+       *  纯线框不是「把实体调暗」—— 是换一套着色器（不吃法线与点光，只吃
+       *  顶色 + 距离雾 + 微光），所以画面更干净、也更快。 */
+      setStyle: function (s) {
+        style = (s === 'line' || s === 'both') ? s : 'solid';
+        return style;
+      },
+      getStyle: function () { return style; },
 
       /** 渲染 t 秒那一帧到 GL canvas，并（可选）合成到 2D canvas */
       draw: function (t) { return engine.drawAt(t, out ? out.ctx : null); },
@@ -317,25 +403,63 @@
         gl.uniformMatrix4fv(uMain.uNormalMat, false, M4.normalMatrix(model));
         gl.uniform1f(uMain.uWave, 0);
         gl.uniform1f(uMain.uEmissive, 0);
-        if (pm.solid) GLC.drawMesh(gl, pm.solid);
-
-        // 水（带波纹）
-        if (pm.water) {
+        // 画质档分流
+        var wantLine = (style === 'line' || style === 'both');
+        if (style === 'both' && pm.solid) GLC.drawMesh(gl, pm.solid);   // 叠加档：实体打底
+        if (pm.water && style !== 'line') {
           gl.uniform1f(uMain.uWave, 1);
-          gl.disable(gl.CULL_FACE);                 // 水面从下面也能看
+          gl.disable(gl.CULL_FACE);
           GLC.drawMesh(gl, pm.water);
           gl.enable(gl.CULL_FACE);
           gl.uniform1f(uMain.uWave, 0);
         }
 
-        // 角色
-        drawCast(shot, abs, local, cam, grade, proj, view);
-
-        // 发光体（自发光，画在最后不受光）
-        if (pm.glow) {
+        // 角色（叠加档走实体；线框档的角色在下面画消隐暗面 + 描边）
+        if (style !== 'line') drawCast(shot, abs, local, cam, grade, proj, view);
+        if (pm.glow && style === 'both') {
           gl.uniform1f(uMain.uEmissive, 1);
           GLC.drawMesh(gl, pm.glow);
           gl.uniform1f(uMain.uEmissive, 0);
+        }
+
+        // 描边通道（线框档 / 叠加档）
+        if (wantLine) {
+          gl.useProgram(progLine);
+          gl.uniformMatrix4fv(uLine.uProj, false, proj);
+          gl.uniformMatrix4fv(uLine.uView, false, view);
+          gl.uniform3fv(uLine.uCamPos, cam.eye);
+          gl.uniform3fv(uLine.uTint, grade.tint);
+          gl.uniform1f(uLine.uFogNear, info.fog.near * grade.fogMul);
+          gl.uniform1f(uLine.uFogFar, info.fog.far * grade.fogMul);
+          gl.uniform1f(uLine.uTime, abs);
+
+          // ① 消隐暗面（仅线框档）：写深度但不上色。
+          //    不做这一步的话深度缓冲是空的，背面的边全透出来 → 一团毛线。
+          //    这层「面」用的是 progLine 的 uFill 分支，片元里直接 return，
+          //    没有点光/法线/雾的任何计算 —— 省的正是这部分。
+          if (style === 'line' && pm.solid) {
+            gl.uniform1f(uLine.uFill, 1);
+            gl.uniformMatrix4fv(uLine.uModel, false, model);
+            GLC.drawMesh(gl, pm.solid);
+            drawCastFill(shot, abs, local, cam);
+            gl.uniform1f(uLine.uFill, 0);
+          }
+
+          // ② 描边本身
+          gl.uniform1f(uLine.uPulse, style === 'line' ? 1 : 0.45);
+          // 纯线框统一成冷白（更像图纸/技术插画）；叠加档保留物体本色做高亮边
+          gl.uniform3fv(uLine.uLineColor, [0.82, 0.90, 1.0]);
+          gl.uniform1f(uLine.uLineMix, style === 'line' ? 0.72 : 0.30);
+          gl.uniform1f(uLine.uAlpha, style === 'line' ? 0.95 : 0.80);
+          gl.disable(gl.CULL_FACE);          // 背面轮廓线也要画，否则转一圈就「缺边」
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+          gl.uniformMatrix4fv(uLine.uModel, false, model);
+          GLC.drawLines(gl, placeLines(pm));
+          drawCastLines(shot, abs, local, cam, proj);
+          gl.disable(gl.BLEND);
+          gl.enable(gl.CULL_FACE);
+          gl.useProgram(progMain);           // 交回主程序，后面的实体/发光还要用它的 uniform
         }
 
         // ④ 辉光后期
@@ -389,7 +513,7 @@
           shotType: shot.shot.type, mood: grade.mood,
           cast: shot.cast.map(function (c) { return c.id + ':' + c.action; }),
           eye: cam.eye, target: cam.target, fov: cam.fov,
-          progress: local, bloom: bloomOn
+          progress: local, bloom: bloomOn, style: style
         };
         engine.lastInfo = info2;
         // 顺手抓 GL 错误：画面为空时这行能直接告诉我们是 shader/纹理/帧缓冲哪一步挂了
@@ -402,7 +526,9 @@
           uProj: !!uMain.uProj, uModel: !!uMain.uModel, uView: !!uMain.uView,
           uLightPos: !!uMain['uLightPos[0]'],
           program: !!progMain, framebuffer: rtScene.ok, tris: info2.tris,
-          drewSolid: !!pm.solid, drewWater: !!pm.water, drewCast: shot.cast.length
+          drewSolid: !!pm.solid, drewWater: !!pm.water, drewCast: shot.cast.length,
+          // 线框档自检：这两个能直接回答「为什么线没出来」
+          lineProgram: !!progLine, drewLine: wantLine ? !!placeLines(pm) : false, style: style
         };
         if (outCtx) {
           outCtx.drawImage(canvas, 0, 0, outCtx.canvas.width, outCtx.canvas.height);
@@ -431,14 +557,15 @@
       /** 统计信息，给 UI 显示 */
       stats: function () {
         var ps = placeCache.stats(), cs = castCache.stats();
-        var tris = 0;
+        var tris = 0, lines = 0;
         placeCache.forEach(function (m) {
           if (m.solid) tris += m.solid.tris;
           if (m.water) tris += m.water.tris;
           if (m.glow) tris += m.glow.tris;
+          if (m.line) lines += m.line.tris;          // 描边按线段数报（tris 字段复用）
         });
         return {
-          places: ps.size, casts: cs.size, tris: tris,
+          places: ps.size, casts: cs.size, tris: tris, lines: lines, style: style,
           bloom: rtScene.ok && rtA.ok,
           evicted: ps.evictions + cs.evictions, hits: ps.hits + cs.hits,
           placeMax: ps.limit, castMax: cs.limit
@@ -456,41 +583,81 @@
       }
     };
 
-    /* ---------- 角色绘制 ---------- */
-    function drawCast(shot, abs, local, cam, grade, proj, view) {
+    /* ---------- 角色绘制 ----------
+     * ⚠️ 描边通道必须和实体通道**用同一份世界变换**，否则线框和实体会错位。
+     *   所以把「局部 → 世界」那段算术抽成 partMatrix()，两条通道都调它 ——
+     *   以前这段只有 drawCast 一处用，抽出来反而少了重复实现。 */
+    function castPose(shot, abs, local, cam) {
+      var out = [];
       for (var k = 0; k < shot.cast.length; k++) {
         var c = shot.cast[k];
         var cm = castMesh(c.id, shot.place);
         if (!cm) continue;
-        // 走位：动作进度在这段里的插值
         var p = smooth(local);
         var x = c.from[0] + (c.to[0] - c.from[0]) * p;
         var z = c.from[2] + (c.to[2] - c.from[2]) * p;
-        // 朝向：走位方向（原地动作就朝着镜头）
         var dx = c.to[0] - c.from[0], dz = c.to[2] - c.from[2];
         var moving = Math.abs(dx) + Math.abs(dz) > 0.05;
         var yaw = moving ? Math.atan2(dx, dz) : Math.atan2(cam.eye[0] - x, cam.eye[2] - z);
         var world = { x: x, y: 0, z: z, yaw: yaw };
-
         var parts = FS.cast.pose(cm.inst, c.action, abs + c.id.charCodeAt(0) * 0.37, world, 1);
         var cy = Math.cos(yaw), sy = Math.sin(yaw);
+        var mats = [];
+        for (var i = 0; i < parts.length; i++) mats.push(partMatrix(parts[i], x, z, yaw, cy, sy));
+        out.push({ cm: cm, parts: parts, mats: mats });
+      }
+      return out;
+    }
 
-        for (var i = 0; i < parts.length; i++) {
-          var part = parts[i];
+    /** 单个部件的局部 → 世界矩阵（先绕自身 pivot 转，再整体偏转 yaw，最后平移） */
+    function partMatrix(part, x, z, yaw, cy, sy) {
+      var lp = part.pos, pv = part.pivot || [0, 0, 0];
+      var rx = lp[0] - pv[0], ry = lp[1] - pv[1], rz = lp[2] - pv[2];
+      var m = M4.fromTRS([pv[0], pv[1], pv[2]], part.rot, part.scale || [1, 1, 1]);
+      var wx = x + (m[0] * rx + m[4] * ry + m[8] * rz + m[12]) * cy + (m[2] * rx + m[6] * ry + m[10] * rz + m[14]) * sy;
+      var wy = (m[1] * rx + m[5] * ry + m[9] * rz + m[13]);
+      var wz = z - (m[0] * rx + m[4] * ry + m[8] * rz + m[12]) * sy + (m[2] * rx + m[6] * ry + m[10] * rz + m[14]) * cy;
+      return M4.fromTRS([wx, wy, wz], [0, yaw, 0], [1, 1, 1]);
+    }
+
+    function drawCast(shot, abs, local, cam, grade, proj, view) {
+      void proj; void view; void grade;
+      var posed = castPose(shot, abs, local, cam);
+      for (var k = 0; k < posed.length; k++) {
+        var cm = posed[k].cm, mats = posed[k].mats;
+        for (var i = 0; i < mats.length; i++) {
           var mesh = cm.meshes[i];
           if (!mesh) continue;
-          // 局部 → 世界：先绕自身 pivot 转，再整体偏转 yaw，最后平移
-          var lp = part.pos, pv = part.pivot || [0, 0, 0];
-          var rx = lp[0] - pv[0], ry = lp[1] - pv[1], rz = lp[2] - pv[2];
-          var m = M4.fromTRS([pv[0], pv[1], pv[2]], part.rot, part.scale || [1, 1, 1]);
-          // 角色整体旋转 + 平移
-          var wx = x + (m[0] * rx + m[4] * ry + m[8] * rz + m[12]) * cy + (m[2] * rx + m[6] * ry + m[10] * rz + m[14]) * sy;
-          var wy = (m[1] * rx + m[5] * ry + m[9] * rz + m[13]);
-          var wz = z - (m[0] * rx + m[4] * ry + m[8] * rz + m[12]) * sy + (m[2] * rx + m[6] * ry + m[10] * rz + m[14]) * cy;
-          var full = M4.fromTRS([wx, wy, wz], [0, yaw, 0], [1, 1, 1]);
-          gl.uniformMatrix4fv(uMain.uModel, false, full);
-          gl.uniformMatrix4fv(uMain.uNormalMat, false, M4.normalMatrix(full));
+          gl.uniformMatrix4fv(uMain.uModel, false, mats[i]);
+          gl.uniformMatrix4fv(uMain.uNormalMat, false, M4.normalMatrix(mats[i]));
           GLC.drawMesh(gl, mesh);
+        }
+      }
+    }
+
+    /** 角色描边：与 drawCast 走同一份 castPose（错位风险从根上消除） */
+    function drawCastLines(shot, abs, local, cam, proj) {
+      void proj;
+      var posed = castPose(shot, abs, local, cam);
+      for (var k = 0; k < posed.length; k++) {
+        var lines = castLines(posed[k].cm);
+        for (var i = 0; i < posed[k].mats.length; i++) {
+          if (!lines[i]) continue;
+          gl.uniformMatrix4fv(uLine.uModel, false, posed[k].mats[i]);
+          GLC.drawLines(gl, lines[i]);
+        }
+      }
+    }
+
+    /** 角色的消隐暗面（只写深度）。与描边共用 castPose，
+     *  这样「挡住线的那层暗面」和「线」在同一个位置，不会出现线浮在面前。 */
+    function drawCastFill(shot, abs, local, cam) {
+      var posed = castPose(shot, abs, local, cam);
+      for (var k = 0; k < posed.length; k++) {
+        for (var i = 0; i < posed[k].mats.length; i++) {
+          if (!posed[k].cm.meshes[i]) continue;
+          gl.uniformMatrix4fv(uLine.uModel, false, posed[k].mats[i]);
+          GLC.drawMesh(gl, posed[k].cm.meshes[i]);
         }
       }
     }

@@ -149,9 +149,12 @@ textarea:focus,#stage:focus{
 #stage{
   width:100%;aspect-ratio:16/9;display:block;background:#E9E0CE;border:1px solid var(--rule-2);border-radius:4px;
 }
-/* 3D：GL 画布绝对定位盖在 stage 上，两者同尺寸 —— stage 仍是最终合成面，导出链路不用改 */
+/* 3D：GL 画布给 WebGL 当离屏画板，真正给眼睛看的是 stage（3D 帧 + 字幕都合成在它上面）。
+   ⚠️ 这里绝不能写 display:block —— 作者样式会盖掉 hidden 属性，
+      那块没画过东西的 GL 画布（alpha:false，默认就是不透明黑）就一直盖在预览区上 = 黑屏。 */
 #stage-wrap{position:relative;line-height:0}
 #gl{position:absolute;left:0;top:0;width:100%;height:100%;display:block;border-radius:4px}
+#gl[hidden]{display:none}   /* 优先级要压过上面那行 display:block */
 .f3d-panel{
   border:1px solid var(--rule);border-left:3px solid var(--olive);
   border-radius:4px;background:var(--trough);padding:11px 13px;margin:12px 0;

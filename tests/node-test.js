@@ -27,6 +27,7 @@ require(path.join(__dirname, '..', 'js', 'scene2d', 'scenes.js'));
 require(path.join(__dirname, '..', 'js', 'scene2d', 'scenes2.js'));
 require(path.join(__dirname, '..', 'js', 'scene2d', 'scenes3.js'));
 require(path.join(__dirname, '..', 'js', 'scene2d', 'pick.js'));
+require(path.join(__dirname, '..', 'js', 'scoresync.js'));
 const FS = global.FS;
 
 let pass = 0, fail = 0;
@@ -999,8 +1000,104 @@ FS.renderScore(fscParsed, { sampleRate: 22050 }).then((buf) => {
       !!FS.world.placeById(s.place) && s.cast.length > 0 && !!s.shot && !!s.shot.type);
   })());
 
-/* ---------- 14. 模型清单：填了 Key 就把这个账号已开通的模型列出来 ---------- */
-section('14. 模型清单（已开通 / 已建接入点）');
+/* ---------- 14. 配乐跟文案对齐：按字幕断句打点，不合拍就不配 ---------- */
+section('14. 配乐跟文案走（字幕断句 / 不合拍静音）');
+{
+  const S = FS.scoreSync;
+  const f2 = {
+    title: '结构之美', template: 'concept', palette: 'ink', bpm: 84, beats: 8,
+    scenes: [
+      { title: 'a', text: '第一句，第二句。第三句！' },
+      { title: 'b', text: '只有一句' }
+    ]
+  };
+
+  ok('断句：按中文标点切开', JSON.stringify(S.splitPhrases('第一句，第二句。第三句！')) ===
+    JSON.stringify(['第一句', '第二句', '第三句']));
+  ok('超长小句按 7 字再切一刀', S.splitPhrases('一二三四五六七八九十一二三四五六七八九十').length === 3);
+  ok('只有标点的文本不出句', S.splitPhrases('，、。！').length === 0);
+
+  const anchors = S.copyAnchors(f2);
+  const tl2 = FS.story.timeline(f2);
+  ok('落点=每句字幕出现的位置（两三段共 4 个）', anchors.length === 4);
+  ok('落点都在自己那段的范围内', anchors.every((a) => a.t >= 0 && a.t <= tl2.total));
+  ok('落点按时间升序', anchors.every((a, i) => i === 0 || a.t >= anchors[i - 1].t));
+
+  // 每个落点都有一记音符顶着 -> 判合拍
+  const a0 = anchors[0].t;
+  const mkHit = (inst) => ({
+    bpm: 84, duration: 999,
+    tracks: [{ instrument: inst || 'pad', notes: anchors.map((a) => ({ p: 'C3', t: a.t })) }]
+  });
+  const hit = mkHit();
+  const repHit = S.syncReport(hit, f2);
+  ok('每个落点都有音符顶着 = 合拍', repHit.use === true && repHit.ratio > 0.99,
+    '(ratio=' + repHit.ratio.toFixed(2) + ')');
+  ok('合拍也给得出人话理由', /重合\s*\d+%/.test(repHit.reason));
+
+  // 音符全在别的地方（差两个半拍以上）-> 判不合拍，宁可不要
+  const off = { bpm: 84, duration: 999, tracks: [{ instrument: 'pad', notes: [{ p: 'C3', t: 0 }] }] };
+  const sparse = { bpm: 84, duration: 999, tracks: [{ instrument: 'pad', notes: [{ p: 'C3', t: 0 }] }] };
+  anchors.forEach((a) => sparse.tracks[0].notes.push({ p: 'G3', t: a.t + 5 }));
+  const repOff = S.syncReport(off, f2), repSparse = S.syncReport(sparse, f2);
+  ok('落点处大片哑着 = 不合拍（宁可不配）', repOff.use === false && /哑的/.test(repOff.reason));
+  ok('起音跟文案整体错开 = 不合拍', repSparse.use === false && repSparse.ratio < S.MIN_RATIO,
+    '(ratio=' + repSparse.ratio.toFixed(2) + ')');
+  ok('长音铺着的算「在响」（不是哑，不能当脱拍砍掉）', (() => {
+    const pad = { bpm: 84, duration: 999, tracks: [{ instrument: 'pad', loop: 0, notes: [{ p: 'C3', t: 0, d: 99 }] }] };
+    const r = S.syncReport(pad, f2);
+    return r.cov > 0.99 && r.use === true;
+  })());
+  ok('循环轨绕下去，短谱不算「太短」', (() => {
+    const r = S.syncReport({
+      bpm: 84, duration: 3,
+      tracks: [{ instrument: 'pad', loop: 3, notes: [{ p: 'C3', t: 0, d: 3 }] }]
+    }, f2);
+    return r.use === true;   // 片子 17s 也没关系，它会一直绕
+  })());
+  ok('一次性短谱压长片 = 不配', (() => {
+    const r = S.syncReport({
+      bpm: 84, duration: 3,
+      tracks: [{ instrument: 'pad', loop: 0, notes: [{ p: 'C3', t: 0, d: 2.5 }] }]
+    }, f2);
+    return r.use === false && /压不住/.test(r.reason);
+  })());
+
+  ok('配乐太短压不住 = 不合拍', (() => {
+    const r = S.syncReport({ bpm: 84, duration: 1.0, tracks: hit.tracks }, f2);
+    return r.use === false && /压不住/.test(r.reason);
+  })());
+  ok('没有文案 = 无处对齐，不配乐', (() => {
+    const r = S.syncReport(hit, { title: 'x', bpm: 84, beats: 8, scenes: [{ text: '' }, { text: '' }] });
+    return r.use === false && /没有文案/.test(r.reason);
+  })());
+  ok('一个音都没有 = 不配乐', (() => {
+    const r = S.syncReport({ bpm: 84, duration: 999, tracks: [] }, f2);
+    return r.use === false && /一个音符/.test(r.reason);
+  })());
+
+  const applied = S.apply(hit, f2, repHit);
+  ok('apply 产出新谱', !!applied.score);
+  ok('不合拍时 apply 不产出（调用方就别渲染了）', S.apply(off, f2, repOff).score === null);
+  ok('原有谱不被改动（apply 是深拷贝）', hit.tracks[0].notes[0].t === a0);
+  ok('新增一条「字幕打点」轨', applied.score.tracks.length === 2 &&
+    applied.score.tracks[1].name === '字幕打点' && applied.score.tracks[1].notes.length === 4);
+  ok('每句落点都有一记重音', applied.score.tracks[1].notes.every((n, i) => Math.abs(n.t - anchors[i].t) < 1e-3));
+  ok('打点轨时长被顶起来（不会中途断在最后一句）', applied.score.duration >= anchors[3].t);
+  ok('原音符吸附到最近的落点（误差在 1e-4 内）',
+    applied.score.tracks[0].notes.every((n, i) => Math.abs(n.t - anchors[i].t) < 1e-4));
+  ok('打点用鼓（原谱里有鼓就别用 blip）', (() => {
+    const withDrum = mkHit('kick');
+    return S.apply(withDrum, f2, S.syncReport(withDrum, f2)).score.tracks[1].instrument === 'kick';
+  })());
+  ok('解析对齐后的谱不报错（round-trip）', (() => {
+    const sc = FS.parseScore(JSON.stringify(applied.score));
+    return sc.tracks.length === 2 && sc.tracks[1].notes.length === 4;
+  })());
+}
+
+/* ---------- 15. 模型清单：填了 Key 就把这个账号已开通的模型列出来 ---------- */
+section('15. 模型清单（已开通 / 已建接入点）');
 
 ok('OpenAI 标准 {data:[{id}]} 能解析', (() => {
   const l = FS.script.parseModelList(JSON.stringify({ object: 'list', data: [

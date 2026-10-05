@@ -167,10 +167,14 @@
     readFilm();
     redraw();
     switchTab('film');
-    hint($('f-musicsrc'), '配乐来源：音乐工厂挑的「' + mfLast.meta.style.name + '」· 指纹 ' + mfLast.meta.fingerprint, 'ok');
+    setMusicLabel('配乐来源：音乐工厂挑的「' + mfLast.meta.style.name + '」· 指纹 ' + mfLast.meta.fingerprint);
   });
 
   /* ================== 图形卷帘接线 ================== */
+  // 配乐那行提示由两截拼成：从哪来的 + 跟文案合不合。分开存，别互相覆盖。
+  var musicLabel = '配乐来源：自动（按片名当主题生成）';
+  function setMusicLabel(s) { musicLabel = s; refreshMusicLine(); }
+
   // 图形编辑器只产出 JSON 文本，剩下还是走 parseScore -> renderScore，不另开一套渲染
   FS.roll.mount({
     canvas: $('roll'),
@@ -385,6 +389,8 @@
     drawTimeline();
     drawDots(tl);
     if (film.template === 'daily') applyScenes();
+    // 配乐那行提示顺手动一下：文案一改，合不合拍的结论可能就变了（musicPlan 有缓存，不重算）
+    try { refreshMusicLine(); } catch (e) {}
   }
 
   function addScene(scene) {
@@ -542,7 +548,14 @@
     g.clearRect(0, 0, cv.width, cv.height);
     // 3D 模式：GL 渲染完由 render3d 自己 drawImage 回 stage 并叠字幕，
     // 所以导出（captureStream(stage)）那条链路一行都不用改。
-    if (st.engine === '3d' && gl3d && gl3d.storyboard) { gl3d.draw(t); return; }
+    if (st.engine === '3d' && gl3d && gl3d.storyboard) {
+      if (gl3d.draw(t)) return;
+      // 这一帧 3D 没出画（取不到地点/几何）→ 当帧丢掉 3D，用 2D 顶上，
+      // 别把一块黑底留在预览里让人以为片子坏了
+      gl3d.setStoryboard(null);
+      var why = $('f-g3d');
+      if (why) hint(why, '✗ 3D 这一帧没画出来，已改用 2D 兜底（点「重新生成分镜」再试）', 'bad');
+    }
     FS.story.drawFrame(g, st, t);
   }
 
@@ -585,7 +598,9 @@
     readFilm();
     $('f3d-panel').hidden = (v !== '3d');
     $('f-2d-row').hidden = (v === '3d');
-    $('gl').hidden = (v !== '3d');
+    // GL 画布永远收着：它只是画板，成帧之后 drawImage 到 stage（含字幕）才给人看。
+    // 放它出来既会遮住 2D 画面（黑块），又会把字幕挡掉。
+    $('gl').hidden = true;
     $('f-g3d').hidden = (v !== '3d');
     $('f-engine-tip').textContent = v === '3d'
       ? '3D：文案 → 地点 / 角色 / 动作 / 镜头'
@@ -767,12 +782,23 @@
   function driveToken() { return drive.token; }
   function driveAlive(tok) { return tok === drive.token; }
 
+  /** 当前进度（秒）。停止/续播/从头播都读它，避免各处各算一遍 */
+  function currentT() {
+    var tl = FS.story.timeline(film);
+    var v = +$('f-scrub').value;
+    var t = isFinite(v) ? v / 1000 * tl.total : 0;
+    return Math.max(0, Math.min(tl.total, isFinite(t) ? t : 0));
+  }
+
   function filmStop() {
     fPlaying = false;
     driveCancel();
     if (fNode) { try { fNode.stop(); } catch (e) {} fNode = null; }
     narrStopAll();
-    $('f-preview').textContent = '▶ 预览播放';
+    // ★ 停在中间就把按钮叫「继续」：点一下从断点接上，不用手动拖进度条回去找
+    var t = currentT(), total = FS.story.timeline(film).total;
+    $('f-preview').textContent = (t > 0.05 && t < total - 0.05)
+      ? '▶ 继续播放（' + t.toFixed(1) + 's）' : '▶ 预览播放';
     if (fStatusAbort) fStatusAbort('已停止');
   }
   /** 导出/播放被中止时的收尾（由 drive token 触发） */
@@ -783,24 +809,41 @@
     try { ctx(); } catch (e) { hint($('f-status'), '✗ ' + e.message, 'bad'); return; }
     var c = ctx();
     filmStop();
+    var from = currentT();                          // ★ 断点续播：从当前进度接，不是每次从头来
+    var plan0 = musicPlan();
     // 配音先合成好（有缓存就是秒回），再起播——预览时人声按时间轴精确排程。
     // 进度直接打在预览按钮上；失败兜底恢复按钮，不再无声无息。
     buildNarrPlan(film, c, function (m) { $('f-preview').textContent = m; }).then(function (plan) {
       if (fPlaying) return;                        // 合成期间用户又点了停止/重播
-      if (film.music && fBuf) {                    // 有配乐就放；没有也照常播（纯画面+配音），预览不强制配乐
-        fNode = c.createBufferSource();
-        fNode.buffer = fBuf;
-        fNode.connect(c.destination);
-        fStart = c.currentTime + 0.08;
-        fNode.start(fStart);
-      } else fStart = c.currentTime + 0.08;        // ⚠️ 必须赋值，否则 fT0 沿用上次的旧值，配音会排程到过去全部齐响
-      fT0 = fStart;
-      narrStopAll();                               // 双保险：清掉任何残留排程，杜绝重叠语音
-      narrStartAt(plan, c, fT0, c.destination);
-      fPlaying = true;
-      tickFilm.tok = driveToken();   // 记下本轮 token：被「停止」作废后 tickFilm 会自行退出
-      $('f-preview').textContent = '❚❚ 播放中';
-      tickFilm();
+      var p = plan0;
+      if (!p.use) {                                // 判为不合拍 → 这台机器这次就没配乐可放
+        fBuf = null;
+        hint($('f-musicsrc'), '⏹ ' + p.reason + ' → 这次不配乐，只有画面 + 配音', 'bad');
+      }
+      // ⚠️ fBuf 以前压根没人赋值过，等于「预览配乐」这个开关一直是死的。
+      //    现在按计划渲染一次（同一个 buffer，试听/导出/预览听到的都是它）。
+      var audio = p.use ? filmRenderAudio() : Promise.resolve(null);
+      return audio.then(function (buf) {
+        if (fPlaying) return;
+        fBuf = buf;
+        if (buf && film.music) {                   // 有配乐就放；没有也照常播（纯画面+配音）
+          fNode = c.createBufferSource();
+          fNode.buffer = buf;
+          fNode.connect(c.destination);
+          fStart = c.currentTime + 0.08 - from;    // ⚠️ 音频整体左移 → 画面时间轴正好落回断点
+          if (fStart < c.currentTime) fStart = c.currentTime;
+          var off = buf.duration > 0.05 ? Math.min(from, buf.duration - 0.05) : 0;
+          fNode.start(fStart, off > 0.01 ? off : undefined);   // 配乐也从断点的那一秒接着响
+        } else fStart = c.currentTime + 0.08 - from;  // ⚠️ 必须赋值，否则 fT0 沿用上次的旧值，配音会排程到过去全部齐响
+        if (fStart < c.currentTime) fStart = c.currentTime;
+        fT0 = fStart;
+        narrStopAll();                             // 双保险：清掉任何残留排程，杜绝重叠语音
+        narrStartAt(plan, c, fT0, c.destination);
+        fPlaying = true;
+        tickFilm.tok = driveToken();   // 记下本轮 token：被「停止」作废后 tickFilm 会自行退出
+        $('f-preview').textContent = '❚❚ 播放中';
+        tickFilm();
+      });
     })['catch'](function (e) {
       $('f-preview').textContent = '▶ 预览播放';
     });
@@ -830,6 +873,16 @@
   $('f-scrub').addEventListener('input', function () { filmStop(); redraw(); });
   $('f-preview').addEventListener('click', function () { fPlaying ? filmStop() : filmPlay(); });
   $('f-stop').addEventListener('click', filmStop);
+  // 停在中间想重看：先回到 0（按钮自动变回「预览播放」），再起播
+  if ($('f-restart')) {
+    $('f-restart').addEventListener('click', function () {
+      filmStop();
+      $('f-scrub').value = 0;
+      $('f-preview').textContent = '▶ 预览播放';
+      redraw();
+      filmPlay();
+    });
+  }
 
   ['f-title', 'f-template', 'f-palette', 'f-bpm', 'f-beats', 'f-sub'].forEach(function (id) {
     $(id).addEventListener('change', function () { readFilm(); syncTemplateUI(); redraw(); });
@@ -842,6 +895,51 @@
   function filmCues() {
     if (film.custom) return film.custom.score;      // 手工挑的那首
     return FS.factory.forFilm(film).score;         // 按片名当主题：同片名可复现，不同片名必不同
+  }
+
+  /* ---------------- 配乐跟文案对齐（不合拍就不配） ----------------
+   * 用户定的两条规矩：
+   *   ① 有文案 → 按字幕断句打点，拍点往字幕落点上靠；
+   *   ② 判为不合拍（重合度太低 / 配乐太短）→ 直接不配乐，只出画面 + 配音。
+   * 判定结果缓存起来：文案没动就不重复体检，预览和导出看到的是同一份结论。
+   */
+  var musicPlanCache = null, musicPlanKey = '';
+
+  function musicPlanKeyOf() {
+    return [film.title, film.template, film.palette, film.bpm, film.beats,
+      JSON.stringify((film.scenes || []).map(function (s) { return (s.title || '') + '|' + (s.text || ''); })),
+      JSON.stringify(film.custom ? film.custom.score : null)].join('#');
+  }
+
+  function musicPlan(force) {
+    var k = musicPlanKeyOf();
+    if (!force && musicPlanCache && musicPlanKey === k) return musicPlanCache;
+    var raw = filmCues();
+    var rep = FS.scoreSync.syncReport(raw, film);
+    var out = FS.scoreSync.apply(raw, film, rep);
+    musicPlanCache = { raw: out.score || raw, use: rep.use, reason: rep.reason,
+      ratio: rep.ratio, anchors: rep.anchors, snapped: !!out.score };
+    musicPlanKey = k;
+    refreshMusicLine();      // 只在重新体检后写一次，拖进度条不会一直重写这行字
+    return musicPlanCache;
+  }
+
+  function refreshMusicLine() {
+    var mh = $('f-musicsrc');
+    if (!mh) return;
+    var p = musicPlan();                        // 命中缓存时不重算
+    var tail = p.use
+      ? '跟字幕对齐：' + p.anchors.length + ' 个落点（' + p.reason + '）'
+      : '⏹ ' + p.reason + ' → 这次不配乐，只有画面 + 配音';
+    hint(mh, musicLabel + ' · ' + tail);
+  }
+
+  /** 配乐到底放不放 + 为什么：给状态行和「只导配乐」按钮用 */
+  function musicHint() {
+    var p = musicPlan();
+    return p.use
+      ? '配乐已按字幕断句对齐（' + p.anchors.length + ' 个落点，' + p.reason + '）'
+      : '⏹ ' + p.reason + ' → 这次不配乐，只有画面 + 配音';
   }
   /* ---------------- 配音（服务器 edge-tts，ffmpeg 级中文音色） ---------------- */
   var narrCache = {};          // 'voice|text' -> AudioBuffer，预览/导出共用
@@ -913,8 +1011,11 @@
     hint($('f-status'), '⏹ 已停止在第 ' + k + '/' + frames + ' 帧', 'ok');
   }
 
+  /** 渲染配乐。判为不合拍时返回 null —— 宁可不配，也别放一段乱响的 */
   function filmRenderAudio() {
-    var sc = FS.parseScore(JSON.stringify(filmCues()));   // 顺带校验，坏谱会给人话错误
+    var p = musicPlan();
+    if (!p.use) return Promise.resolve(null);
+    var sc = FS.parseScore(JSON.stringify(p.raw));   // 顺带校验，坏谱会给人话错误
     return FS.renderScore(sc, { sampleRate: 44100 });
   }
 
@@ -924,13 +1025,19 @@
     var res = FS.factory.generateUnique({ theme: film.title, bpm: film.bpm, bars: bars }, mfUsed);
     film.custom = { score: res.score, meta: res.meta };
     mfApply(res);                                   // 顺便让配乐台也能看/改这一首
-    hint($('f-musicsrc'), '配乐来源：按片名「' + film.title + '」现生成 · ' +
-      res.meta.style.name + ' / ' + res.meta.bpm + ' BPM / 指纹 ' + res.meta.fingerprint, 'ok');
+    setMusicLabel('配乐来源：按片名「' + film.title + '」现生成 · ' +
+      res.meta.style.name + ' / ' + res.meta.bpm + ' BPM / 指纹 ' + res.meta.fingerprint);
   });
 
   $('f-audio').addEventListener('click', function () {
     try { ctx(); } catch (e) { hint($('f-status'), '✗ ' + e.message, 'bad'); return; }
+    var p = musicPlan();
+    if (!p.use) {                       // 不合拍就直说，别给用户一个 0 秒的 wav
+      hint($('f-status'), '⏹ 这次不导配乐：' + p.reason, 'bad');
+      return;
+    }
     filmRenderAudio().then(function (buf) {
+      if (!buf) { hint($('f-status'), '⏹ 这次不导配乐：' + p.reason, 'bad'); return; }
       var blob = new Blob([FS.encodeWav(buf)], { type: 'audio/wav' });
       FS.download(blob, (film.title || 'score') + '.wav');
       hint($('f-status'), '✓ 配乐已导出（' + buf.duration.toFixed(1) + 's，' + (blob.size / 1048576).toFixed(2) + ' MB）', 'ok');
@@ -987,11 +1094,14 @@
       var buf = r.buf, plan = r.plan;
       if (snap.engine === '3d' && gl3d && sbSnap) gl3d.setStoryboard(sbSnap);
       var media = c.createMediaStreamDestination();
-      var node = c.createBufferSource();
-      node.buffer = buf;
-      node.connect(media);
-      node.connect(c.destination);      // 同步外放，不然录的时候听不见
-      var rec = new MediaRecorder(new MediaStream([track, media.stream.getAudioTracks()[0]]),
+      var node = null;
+      if (buf) {                        // 判为不合拍时 buf 为 null —— 只录画面 + 配音，不放空响轨
+        node = c.createBufferSource();
+        node.buffer = buf;
+        node.connect(media);
+        node.connect(c.destination);    // 同步外放，不然录的时候听不见
+      }
+      var rec = new MediaRecorder(new MediaStream([track].concat(media.stream.getAudioTracks())),
         mime ? { mimeType: mime, videoBitsPerSecond: 6000000 } : undefined);
 
       var chunks = [];

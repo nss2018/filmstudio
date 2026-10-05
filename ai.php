@@ -37,6 +37,28 @@ $ALLOW = [
   'dashscope.aliyuncs.com',        // 通义千问
 ];
 
+/* ---------- 各家的「版本段」前缀 ----------
+ * 客户端只带业务路径（/chat/completions），版本段（方舟是 /api/v3）必须在这里补齐。
+ * ⚠️ 这里踩过一个真坑：以前直接 "https://$host$path"，方舟就被拼成
+ *    https://ark.cn-beijing.volces.com/chat/completions —— 缺 /api/v3，网关一律 404。
+ *    而「列模型」那行当时写死了 /api/v3/models 是对的，所以现场怪像是
+ *    「模型列得出来，一聊天就 404」。 */
+$PREFIX = [
+  'ark.cn-beijing.volces.com' => '/api/v3',           // 火山方舟（豆包）
+  'api.deepseek.com'          => '/v1',
+  'api.openai.com'            => '/v1',
+  'api.siliconflow.cn'        => '/v1',
+  'api.moonshot.cn'           => '/v1',
+  'open.bigmodel.cn'          => '/api/paas/v4',      // 智谱 GLM
+  'dashscope.aliyuncs.com'    => '/compatible-mode/v1', // 通义千问兼容模式
+];
+/** 拼上游完整 URL：host 决定版本段；客户端若已自带版本段（/v1、/api/v3）就不重复拼。 */
+function upstream_url($host, $path, $PREFIX) {
+  $pfx = isset($PREFIX[$host]) ? $PREFIX[$host] : '';
+  if ($pfx !== '' && !preg_match('#^/(api/)?v\d#i', $path)) $path = $pfx . $path;
+  return "https://$host$path";
+}
+
 function out_json($code, $arr) {
   http_response_code($code);
   header('Content-Type: application/json; charset=utf-8');
@@ -67,7 +89,7 @@ if (isset($_GET['models'])) {
   $host = trim((string)($_GET['host'] ?? 'ark.cn-beijing.volces.com'));
   if (!in_array($host, $ALLOW, true)) fail(403, "host 不在白名单里：$host");
   if ($key === '') fail(400, '没填 Key');
-  $ch = curl_init("https://$host/api/v3/models");
+  $ch = curl_init(upstream_url($host, '/models', $PREFIX));
   curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . $key, 'Content-Type: application/json'],
@@ -104,7 +126,7 @@ if (getenv('AI_PROXY_KEY') && !hash_equals((string)getenv('AI_PROXY_KEY'), $key)
   // 预留：若将来想强制「Key 必须先在服务端登记」，把 AI_PROXY_KEY 配进 php-fpm 环境即可
 }
 
-$ch = curl_init("https://$host$path");
+$ch = curl_init(upstream_url($host, $path, $PREFIX));
 $headers = ['Content-Type: application/json'];
 if ($key !== '') $headers[] = 'Authorization: Bearer ' . $key;
 curl_setopt_array($ch, [

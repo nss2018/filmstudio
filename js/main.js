@@ -1365,11 +1365,22 @@
   });
 
   /* API 设置：本地存，换设备不会带过去（本来就没打算同步） */
+  /** 方舟系模型名跟别家不通用：ep- 接入点 / 含 doubao / 带「-日期」后缀的才是方舟的。
+   *  典型事故：从 DeepSeek 预设切到「走本站代理」，模型框还留着 deepseek-chat，
+   *  代理把它原样转发给方舟 → 方舟 404（models not found）。所以方舟系预设不继承外来模型。 */
+  function looksArkModel(m) {
+    m = String(m || '').trim();
+    if (!m) return false;
+    return /^ep-/i.test(m) || /doubao/i.test(m) || /-\d{6}$/.test(m);
+  }
   function applyPreset(id) {
     var p = FS.script.PRESETS.filter(function (x) { return x.id === id; })[0];
     if (!p) return;
+    var arkLike = (p.id === 'ark' || p.id === 'local-ark');
     $('sw-base').value = p.base || cfg.base || '';
-    $('sw-model').value = p.model || cfg.model || '';
+    // 方舟系预设只继承「看着像方舟」的模型，别把 deepseek-chat 这种带过去撞 404
+    var keep = arkLike ? (looksArkModel(cfg.model) ? cfg.model : '') : cfg.model;
+    $('sw-model').value = p.model || keep || '';
     // 方舟按账号授权模型：预设里那个预览模型（doubao-seed-2-0-code-preview）不是每个账号都有，
     // 撞上去就是 401。查到清单就优先用 ep- 推理接入点——那是你自己在控制台建过、必定有权限的。
     // 走本站 ai.php 代理那条预设（local-ark）模型本来就是空的，同样吃这个兜底。

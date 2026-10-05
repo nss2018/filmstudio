@@ -330,7 +330,23 @@
       }
       return 'Key 不对 / 过期 / 被删了，或者 base 地址给错了。';
     }
-    if (status === 404) return 'base 不像 OpenAI 兼容端点，应该是 https://xxx/v1 这种（方舟是 https://ark.cn-beijing.volces.com/api/v3）。';
+    if (status === 404) {
+      // 404 有两层含义，别一律甩锅给 base：
+      //   ① base / 路径不对（少了 /v1、/api/v3 这类版本段，或端点压根不存在）；
+      //   ② 端点是对的，但模型在方舟这边不存在 / 这个 Key 没被授权用它
+      //      —— 方舟对这种情况同样回 404（code=NotFound / ModelNotFound），很容易被误判成①。
+      var isArk = /volces|ark\.cn/i.test(base || '');
+      var mdl = String(model || '').trim();
+      var modelHit = /model|not\s*found|notfound|does not exist|不存在|未开通|未授权|no permission/i.test(txt || '');
+      if (isArk) {
+        var t = ['方舟回 404：端点是 ' + (base || '')];
+        t.push('模型「' + (mdl || '（空）') + '」在方舟上不存在，或这个 Key 没被授权用它——点「拉这个 Key 已开通的模型」，从下拉里挑一个（有 ep- 推理接入点优先选它）');
+        if (!mdl) t.push('模型框是空的，它会拿默认值去撞墙');
+        return t.join('；') + '。';
+      }
+      if (modelHit) return '端点能通，但模型名不对：' + (mdl || '（空）') + ' 这家查不到，换个有效的模型名。';
+      return 'base 不像 OpenAI 兼容端点，应该是 https://xxx/v1 这种（方舟是 https://ark.cn-beijing.volces.com/api/v3）。';
+    }
     if (status === 429) return '被限流了：等一会儿再点，或者换个便宜点的模型。';
     if (status >= 500) return '上游自己炸了，稍后再试；还不行就把上面这段原话原样发我。';
     return '';
@@ -408,7 +424,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
       body: JSON.stringify({
-        model: cfg.model || 'deepseek-chat',
+        model: cfg.model || (/volces|ark\.cn/i.test(base) ? 'doubao-seed-1-6-251015' : 'deepseek-chat'),
         temperature: 0.9,
         messages: [{ role: 'user', content: promptStr }]
       }),

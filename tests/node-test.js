@@ -1206,7 +1206,20 @@ const listMsg = function (cfg) {
     const m3 = u(401, e401, ARK, '');
     ok('模型空着 → 提示先去拉清单', /模型框还是空的/.test(m3) || /拉这个 Key 已开通的模型/.test(m3));
     ok('非方舟 401 只说 Key 与 base', /Key 不对 \/ 过期/.test(u(401, e401, 'https://api.deepseek.com/v1', 'deepseek-chat')));
-    ok('404 提示 base 长什么样', /\/v1/.test(u(404, '', 'https://ark.cn-beijing.volces.com/api/v3')));
+    // 404 有两条成因完全不同的路，提示必须分得开（2026-10-05 修 ai.php 漏 /api/v3 时补）：
+    //   ① 端点 / 版本段不对（少 /v1、/api/v3） → 该说 base；
+    //   ② 端点是对的但模型不存在 / 没授权   → 该说模型（方舟对这种情况也回 404，极易被误判成①）
+    ok('404 且是方舟：不再甩锅 base，改说模型不对',
+      !/base 不像/.test(u(404, '', ARK, 'deepseek-chat'))
+      && /模型/.test(u(404, '', ARK, 'deepseek-chat'))
+      && /拉这个 Key 已开通的模型/.test(u(404, '', ARK, 'deepseek-chat')));
+    ok('404 且是方舟：把填错的模型名点出来',
+      u(404, '{"error":{"code":"ModelNotFound","message":"model does not exist"}}', ARK, 'deepseek-chat')
+        .indexOf('deepseek-chat') > 0);
+    ok('404 非方舟 + 上游说模型：也只说模型',
+      /模型名不对/.test(u(404, '{"error":{"message":"The model x does not exist"}}', 'https://api.deepseek.com/v1', 'x')));
+    ok('404 非方舟 + 没提模型：仍是 base 版本段的老提示',
+      /base 不像|\/v1/.test(u(404, '', 'https://api.deepseek.com/v1', 'deepseek-chat')));
     ok('429 提示限流', /限流/.test(u(429, '')) && /限流/.test(tip(429, ARK, '', '')));
     ok('5xx 让人稍后再试并愿意收原话', /上游自己炸了/.test(u(500, '')));
     ok('账号异常单独说（实名/欠费）',
@@ -1406,6 +1419,17 @@ const listMsg = function (cfg) {
       '(' + opts.join(',') + ')');
     ok('代理预设排在下拉第一位（开箱默认就是它）', opts[0] === 'local-ark');
     ok('API 设置区写明了 ai.php 中转这回事', /ai\.php/.test(html));
+  })();
+
+  // ⑤ ai.php 拼上游 URL 必须带版本段 —— 曾经的真实 bug：裸拼 "https://$host$path"，
+  //    方舟被拼成 https://ark.cn-beijing.volces.com/chat/completions（缺 /api/v3）→ 网关一律 404，
+  //    而「列模型」那行写着 /api/v3/models 是对的，于是出现「模型列得出、一聊天就 404」的怪像。
+  (function () {
+    const php = require('fs').readFileSync(path.join(__dirname, '..', 'ai.php'), 'utf8');
+    ok('ai.php 用 upstream_url() 拼地址（不再裸拼 host+path）',
+      /upstream_url\(/.test(php) && !/curl_init\("https:\/\/\$host\$path"\)/.test(php));
+    ok('ai.php 的前缀表里方舟是 /api/v3', /'ark\.cn-beijing\.volces\.com'\s*=>\s*'\/api\/v3'/.test(php));
+    ok('ai.php 列模型也走 upstream_url（不写死一家）', /upstream_url\(\$host,\s*'\/models'/.test(php));
   })();
 
   section('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败');

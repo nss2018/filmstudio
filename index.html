@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>科普宣传片工坊 · 配乐 + 渲染，一处出片</title>
-<link rel="stylesheet" href="css/app.css?v=20261005e">
+<link rel="stylesheet" href="css/app.css?v=20261005f">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
@@ -22,6 +22,7 @@
   <symbol id="i-edit" viewBox="0 0 24 24"><path d="M11 4.5H4.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2V12.5"/><path d="M17.8 2.7a2.1 2.1 0 0 1 3 3L12 14.5l-3.8 1 1-3.8z"/></symbol>
   <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6.5" r="2.8"/><circle cx="6" cy="17.5" r="2.8"/><line x1="20" y1="4.5" x2="8.4" y2="15.6"/><line x1="14.6" y1="14.6" x2="20" y2="20"/><line x1="8.4" y1="8.4" x2="11.6" y2="12"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><line x1="12" y1="5.5" x2="12" y2="18.5"/><line x1="5.5" y1="12" x2="18.5" y2="12"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><line x1="8.5" y1="6.5" x2="20" y2="6.5"/><line x1="8.5" y1="12" x2="20" y2="12"/><line x1="8.5" y1="17.5" x2="20" y2="17.5"/><circle cx="4.6" cy="6.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="4.6" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="4.6" cy="17.5" r="1.3" fill="currentColor" stroke="none"/></symbol>
 </svg>
 
 <header class="topbar">
@@ -212,12 +213,17 @@
               </label>
               <label class="fl">Base（OpenAI 兼容）<input type="text" id="sw-base" placeholder="https://api.deepseek.com/v1"></label>
               <label class="fl">Key<input type="password" id="sw-key" placeholder="sk-…" autocomplete="off"></label>
-              <label class="fl">模型<input type="text" id="sw-model" placeholder="deepseek-chat"></label>
+              <label class="fl">模型<input type="text" id="sw-model" list="sw-model-list" placeholder="deepseek-chat" autocomplete="off"></label>
+            </div>
+            <datalist id="sw-model-list"></datalist>
+            <div class="btn-row inline">
+              <button id="sw-list" class="btn"><svg class="ico"><use href="#i-list"/></svg>拉这个 Key 已开通的模型</button>
+              <span class="mono dim" id="sw-models">还没查过这个 Key 能调哪些模型</span>
             </div>
             <div class="hint">这里是<b>浏览器直连你的 API</b>，Key 只写在 localStorage，不进代码、不进 Git、不过本站任何服务器。<br>
               <b>接豆包 / 火山方舟：</b>选上面的「火山方舟 豆包 Doubao」→ Base 和模型会自动填好，把
               <a href="https://console.volcengine.com/ark/api_key" target="_blank" rel="noopener">方舟控制台</a>
-              里复制的 API Key 粘进 Key 框（打开页面时它会自动回填上次存的）。下方「导演 → AI 导演」就能用了。<br>
+              里复制的 API Key 粘进 Key 框（打开页面时它会自动回填上次存的），<b>这个 Key 已开通 / 已建好的模型会自动列在「模型」下拉里直接选</b>，不用去控制台抄名字；换 Key 或换服务商时点一下上面那个按钮重拉。<br>
               某些服务不给浏览器跨域（CORS），直连会失败——这种情况把仓库里的 <code>workers/proxy.js</code> 贴到一个 Cloudflare Worker，Base 填那个 worker 地址就行。</div>
           </div>
         </details>
@@ -348,29 +354,29 @@
   <span class="mono" id="probe-badge"></span>
 </footer>
 
-<script src="js/theme.js?v=20261005e"></script>
-<script src="js/score.js?v=20261005e"></script>
-<script src="js/wav.js?v=20261005e"></script>
-<script src="js/synth.js?v=20261005e"></script>
-<script src="js/story.js?v=20261005e"></script>
-<script src="js/factory.js?v=20261005e"></script>
-<script src="js/gl/core.js?v=20261005e"></script>
-<script src="js/gl/lru.js?v=20261005e"></script>
-<script src="js/gl/geom.js?v=20261005e"></script>
-<script src="js/gl/camera.js?v=20261005e"></script>
-<script src="js/gl/world.js?v=20261005e"></script>
-<script src="js/gl/cast.js?v=20261005e"></script>
-<script src="js/gl/render.js?v=20261005e"></script>
-<script src="js/director.js?v=20261005e"></script>
-<script src="js/gl/world2.js?v=20261005e"></script>
-<script src="js/gl/world3.js?v=20261005e"></script>
-<script src="js/scene2d/core.js?v=20261005e"></script>
-<script src="js/scene2d/scenes.js?v=20261005e"></script>
-<script src="js/scene2d/scenes2.js?v=20261005e"></script>
-<script src="js/scene2d/scenes3.js?v=20261005e"></script>
-<script src="js/scene2d/pick.js?v=20261005e"></script>
-<script src="js/roll.js?v=20261005e"></script>
-<script src="js/script.js?v=20261005e"></script>
-<script src="js/main.js?v=20261005e"></script>
+<script src="js/theme.js?v=20261005f"></script>
+<script src="js/score.js?v=20261005f"></script>
+<script src="js/wav.js?v=20261005f"></script>
+<script src="js/synth.js?v=20261005f"></script>
+<script src="js/story.js?v=20261005f"></script>
+<script src="js/factory.js?v=20261005f"></script>
+<script src="js/gl/core.js?v=20261005f"></script>
+<script src="js/gl/lru.js?v=20261005f"></script>
+<script src="js/gl/geom.js?v=20261005f"></script>
+<script src="js/gl/camera.js?v=20261005f"></script>
+<script src="js/gl/world.js?v=20261005f"></script>
+<script src="js/gl/cast.js?v=20261005f"></script>
+<script src="js/gl/render.js?v=20261005f"></script>
+<script src="js/director.js?v=20261005f"></script>
+<script src="js/gl/world2.js?v=20261005f"></script>
+<script src="js/gl/world3.js?v=20261005f"></script>
+<script src="js/scene2d/core.js?v=20261005f"></script>
+<script src="js/scene2d/scenes.js?v=20261005f"></script>
+<script src="js/scene2d/scenes2.js?v=20261005f"></script>
+<script src="js/scene2d/scenes3.js?v=20261005f"></script>
+<script src="js/scene2d/pick.js?v=20261005f"></script>
+<script src="js/roll.js?v=20261005f"></script>
+<script src="js/script.js?v=20261005f"></script>
+<script src="js/main.js?v=20261005f"></script>
 </body>
 </html>

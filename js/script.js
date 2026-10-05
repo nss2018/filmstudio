@@ -308,6 +308,118 @@
     })['finally'](function () { clearTimeout(timer); });
   }
 
+  /* ---------------- 模型清单：这个 Key 到底能调哪些模型 ----------------
+   * 各家 OpenAI 兼容端点都有 GET /models，方舟是 /api/v3/models。
+   * 目的很实在：别让用户去控制台一个个抄模型名，填完 Key 直接列出来给他选。
+   */
+
+  /** 模型名 → 人话备注（下拉里显示这个，填进请求的是 option 的 value） */
+  var MODEL_TAGS = [
+    [/^ep-/, '自建接入点（控制台建的应用）'],
+    [/seed-?2[.\-_]?0/, '豆包 Seed 2.0 · 最新旗舰（推理/长文）'],
+    [/seed-?1[.\-_]?6|seed-?1[.\-_]?5/, '豆包 Seed 1.6/1.5 · 视觉理解'],
+    [/doubao-?lite|doubao-lite/i, '豆包 Lite · 便宜快'],
+    [/doubao-?pro|doubao-pro/i, '豆包 Pro · 均衡'],
+    [/doubao/i, '豆包'],
+    [/deepseek-?r1|deepseek-reasoner/i, 'DeepSeek R1 · 推理'],
+    [/deepseek/i, 'DeepSeek'],
+    [/kimi|moonshot/i, 'Kimi'],
+    [/glm-/i, 'GLM · 智谱'],
+    [/qwen/i, '通义千问 Qwen'],
+    [/gpt-?4o/i, 'GPT-4o'],
+    [/gpt-?4/i, 'GPT-4'],
+    [/^o[13]/i, 'o 系列推理'],
+    [/claude/i, 'Claude'],
+    [/gemini/i, 'Gemini'],
+    [/ernie|wenxin/i, '文心一言']
+  ];
+  function modelLabel(id) {
+    for (var i = 0; i < MODEL_TAGS.length; i++) if (MODEL_TAGS[i][0].test(id)) return MODEL_TAGS[i][1];
+    return id;
+  }
+
+  /** 补全 base 到「带版本段」的形式（跟 callApi 一个规矩） */
+  function normalizeBase(base) {
+    var b = String(base || '').replace(/\/+$/, '');
+    if (!b) return '';
+    if (!/\/v\d+$/.test(b)) b += '/v1';
+    return b;
+  }
+
+  /** 把 /models 的响应体解析成 [{id,label}]。抽成纯函数好测。 */
+  function parseModelList(txt) {
+    var j = null;
+    try { j = JSON.parse(txt); } catch (e) { /* 再兜一次 */ }
+    if (!j && txt) {
+      var m = /\{[\s\S]*\}/.exec(String(txt));
+      if (m) { try { j = JSON.parse(m[0]); } catch (e2) {} }
+    }
+    if (j && j.error) throw new Error(j.error.message || j.error.code || '上游报错');
+    if (!j) throw new Error('上游返回了非 JSON：' + String(txt).slice(0, 120));
+    var arr = Array.isArray(j) ? j
+      : Array.isArray(j.data) ? j.data
+      : Array.isArray(j.models) ? j.models : null;
+    if (!arr) throw new Error('模型清单格式不认识（没找到 data 数组）');
+    var out = [], seen = {};
+    arr.forEach(function (x) {
+      var id = typeof x === 'string' ? x
+        : (x && typeof x === 'object') ? (x.id || x.name || x.model || x.model_id) : '';
+      if (typeof id !== 'string') return;
+      id = id.trim();
+      if (!id || seen[id]) return;
+      seen[id] = 1;
+      out.push({ id: id, label: modelLabel(id) });
+    });
+    if (!out.length) throw new Error('模型清单是空的——这个 Key 好像没开通任何模型');
+    return out;
+  }
+
+  /** 拉模型清单。返回 Promise<[{id,label}]>；401/404/CORS 都给人话。 */
+  function listModels(cfg) {
+    if (!cfg || !cfg.key) return Promise['reject'](new Error('先填 API Key'));
+    var base = normalizeBase(cfg.base);
+    if (!base) return Promise['reject'](new Error('Base 地址还是空的'));
+    var ctrl = (root.AbortController ? new root.AbortController() : null);
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 30000);
+    function fin() { clearTimeout(timer); }
+    return fetch(base + '/models', {
+      headers: { 'Authorization': 'Bearer ' + cfg.key },
+      signal: ctrl ? ctrl.signal : undefined
+    }).then(function (res) {
+      if (res.status === 401 || res.status === 403) throw new Error('Key 被拒（' + res.status + '）—— 这个 Key 没开通模型或没权限列清单');
+      if (res.status === 404) throw new Error('404 —— base 不像模型清单端点（方舟填 https://ark.cn-beijing.volces.com/api/v3）');
+      if (res.status >= 400) throw new Error('上游拒绝列模型（' + res.status + '）');
+      return res.text().then(parseModelList);
+    })['catch'](function (err) {
+      var msg = err && err.message ? err.message : String(err);
+      if (/Failed to fetch|NetworkError|CORS|Load failed|aborted/i.test(msg))
+        throw new Error('直连被浏览器拦了（CORS）或超时——这个服务不给跨域列模型。用 workers/proxy.js 挂个 Cloudflare Worker 当代理，Base 填那个地址再拉一次。');
+      throw err;
+    })['finally'](fin);
+  }
+
+  /* 清单只存本机，7 天一过重新拉（模型上线很勤，别让缓存骗人） */
+  var MODEL_CACHE_KEY = 'fs.script.models';
+  var MODEL_TTL = 7 * 864e5;
+  function readModelCache(base) {
+    try {
+      var LS = root.localStorage; if (!LS || !base) return null;
+      var all = JSON.parse(LS.getItem(MODEL_CACHE_KEY) || '{}') || {};
+      var hit = all[normalizeBase(base)];
+      if (!hit || !hit.ts || Date.now() - hit.ts > MODEL_TTL || !Array.isArray(hit.list)) return null;
+      return hit.list;
+    } catch (e) { return null; }
+  }
+  function writeModelCache(base, list) {
+    try {
+      var LS = root.localStorage; if (!LS || !base) return;
+      var all = {};
+      try { all = JSON.parse(LS.getItem(MODEL_CACHE_KEY) || '{}') || {}; } catch (e) {}
+      all[normalizeBase(base)] = { ts: Date.now(), list: list };
+      LS.setItem(MODEL_CACHE_KEY, JSON.stringify(all));
+    } catch (e) { /* 隐私模式写不进去就算了 */ }
+  }
+
   /** 拉一次 LLM 生成文案。opts: {base, key, model, topic, example, mood, count} */
   function llm(opts) {
     return callApi(opts, PROMPT(opts), function (content) {
@@ -346,6 +458,9 @@
   FS.script = {
     local: local, llm: llm, generate: generate, parse: parse, PROMPT: PROMPT,
     callApi: callApi, extractContent: extractContent,
+    listModels: listModels, parseModelList: parseModelList,
+    readModelCache: readModelCache, writeModelCache: writeModelCache,
+    normalizeBase: normalizeBase,
     advice: advice, PRESETS: PRESETS, MOODS: MOODS,
     loadCfg: loadCfg, saveCfg: saveCfg,
     // 给测试用

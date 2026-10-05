@@ -1219,17 +1219,127 @@
     $('sw-base').value = p.base || cfg.base || '';
     $('sw-model').value = p.model || cfg.model || '';
   }
-  $('sw-preset').addEventListener('change', function () { cfg.preset = this.value; applyPreset(this.value); });
+  $('sw-preset').addEventListener('change', function () { cfg.preset = this.value; applyPreset(this.value); pullModels(true); });
   ['sw-base', 'sw-key', 'sw-model'].forEach(function (id) {
     $(id).addEventListener('change', function () {
       cfg[id] = this.value;
       cfg.base = $('sw-base').value; cfg.model = $('sw-model').value; cfg.key = $('sw-key').value;
       FS.script.saveCfg(cfg);
+      if (id === 'sw-model') rememberModel(this.value.trim());
+      else pullModels(true);      // 换了 Key / Base 就重新列一次这个账号能用什么
     });
+    // 边打字边探会刷爆请求：松手稍等再自动拉一次（同一 Key 只自动一次，之后靠按钮）
+    if (id === 'sw-key' || id === 'sw-base') {
+      $(id).addEventListener('input', debounce(function () {
+        var k = $('sw-key').value.trim(), b = $('sw-base').value.trim();
+        if (!k || !b) return;
+        pullModels(true);
+      }, 1200));
+    }
   });
+
+  /* ---- 模型清单：填了 Key 就把这个账号已开通的模型列进下拉 ----
+   * 下拉是 datalist（保留手打能力，自定义端点也能用），option 的 value 就是真实模型名，
+   * label 给人看：中文备注 + 是不是自建接入点。 */
+  function debounce(fn, ms) {
+    var t = null;
+    return function () {
+      var self = this, args = arguments;
+      clearTimeout(t);
+      t = setTimeout(function () { fn.apply(self, args); }, ms);
+    };
+  }
+
+  /** [{id,label}] 塞进 datalist。已经填了（上次选的 / 手打的）就别动，空着才替他选第一个。 */
+  function fillModelPicker(list) {
+    var dl = $('sw-model-list'), inp = $('sw-model');
+    if (!dl || !inp) return { n: 0, cur: '', inList: false };
+    var cur = (inp.value || '').trim();
+    dl.innerHTML = '';
+    (list || []).forEach(function (m) {
+      var o = document.createElement('option');
+      o.value = m.id;
+      if (m.label && m.label !== m.id) o.setAttribute('label', m.label);
+      dl.appendChild(o);
+    });
+    var inList = !!cur && (list || []).some(function (m) { return m.id === cur; });
+    if (!cur && list && list.length) inp.value = list[0].id;   // 空着 → 直接替他选上，省得手抄
+    return { n: (list || []).length, cur: cur, inList: inList };
+  }
+
+  /** 手打的模型名也留个档（下次下拉里还能翻出来，最多 8 条） */
+  function rememberModel(v) {
+    if (!v) return;
+    var h = cfg.modelHistory || (cfg.modelHistory = []);
+    if (h.indexOf(v) < 0) { h.unshift(v); if (h.length > 8) h.length = 8; }
+    FS.script.saveCfg(cfg);
+  }
+
+  function modelTip(msg, cls) {
+    var el = $('sw-models');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'mono dim' + (cls ? ' ' + cls : '');
+  }
+
+  /** 拉清单。quiet=true 时不抢 sw-status 的位置，只在模型那行小字里说话 */
+  var lastPull = { key: '', ts: 0 };
+  function pullModels(quiet, force) {
+    var k = $('sw-key').value.trim(), base = $('sw-base').value.trim();
+    // 同一个 Key 刚拉过（4 秒内）就别重复刷，不然边打字边发请求
+    var sig = k + '@' + base, now = Date.now();
+    if (!force && lastPull.key === sig && now - lastPull.ts < 4000) return;
+    lastPull.key = sig; lastPull.ts = now;
+    if (!k) {
+      modelTip('✗ 先填 Key 才能列清单');
+      if (!quiet) hint($('sw-status'), '✗ 先填 Key，才能列出这个账号已开通的模型', 'bad');
+      return;
+    }
+    if (!base) {
+      modelTip('✗ Base 是空的');
+      if (!quiet) hint($('sw-status'), '✗ Base 还是空的——先选个服务商（Base 会自动补）', 'bad');
+      return;
+    }
+    var btn = $('sw-list');
+    if (btn) btn.disabled = true;
+    if (!quiet) modelTip('正在查…');
+    FS.script.listModels({ base: base, key: k }).then(function (list) {
+      var r = fillModelPicker(list);
+      FS.script.writeModelCache(base, list);
+      var msg = '✓ 这个 Key 可调用 ' + r.n + ' 个模型' + (r.cur && !r.inList ? '（你填的 ' + r.cur + ' 不在里头，注意别写错）' : '');
+      modelTip(msg, r.cur && !r.inList ? 'bad' : 'ok');
+      if (quiet) hint($('sw-status'), '✓ 已列出这个 Key 的 ' + r.n + ' 个可用模型，在「模型」下拉里直接选', 'ok');
+    })['catch'](function (e) {
+      modelTip('✗ ' + e.message);
+      // 自动拉失败别吵（可能这家根本不给跨域）；手动点的、或方舟，必须说清楚
+      if (!quiet || cfg.preset === 'ark') hint($('sw-status'), '✗ 拉模型清单失败：' + e.message, 'bad');
+    })['finally'](function () { if (btn) btn.disabled = false; });
+  }
+  $('sw-list').addEventListener('click', function () { pullModels(false, true); });
+
   if (cfg.preset) $('sw-preset').value = cfg.preset;
   applyPreset(cfg.preset || 'deepseek');
   if (cfg.key) $('sw-key').value = cfg.key;
+  // 先拿缓存把下拉填上（离线也能选），再悄悄去服务端刷新一次
+  (function bootModels() {
+    var base = $('sw-base').value.trim();
+    if (!base) return;
+    var cached = FS.script.readModelCache(base);
+    if (cached && cached.length) fillModelPicker(cached);
+    if ($('sw-key').value.trim()) pullModels(true);
+  })();
+  // 手打过的模型也补进下拉（追加，别把已开通的顶掉）
+  (function bootHistory() {
+    var cur = $('sw-model').value.trim();
+    var dl = $('sw-model-list');
+    var h = (cfg.modelHistory || []).filter(function (x) { return x && x !== cur; });
+    if (!dl || !h.length) return;
+    h.forEach(function (x) {
+      var o = document.createElement('option');
+      o.value = x; o.setAttribute('label', '你上次用的');
+      dl.appendChild(o);
+    });
+  })();
 
   /* ================== tab 切换 & 环境自检 ================== */
   function switchTab(key) {

@@ -37,6 +37,9 @@ body{
 }
 .mono{font-family:var(--mono)}
 .dim{color:var(--ink-2)}
+/* 状态文字（模型清单那一行的小字）：跟 .hint 一个语义色，但走等宽 */
+.mono.ok{color:var(--olive)}
+.mono.bad{color:var(--brick)}
 
 /* 滚动条（暖色化，别是系统灰） */
 ::-webkit-scrollbar{width:10px;height:10px}
@@ -183,6 +186,7 @@ code{font-family:var(--mono);background:var(--trough-deep);border:1px solid var(
 .btn.ghost:hover{background:var(--trough);text-decoration-color:var(--accent);color:var(--ink)}
 .btn[disabled]{opacity:.45;cursor:not-allowed}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.btn-row.inline{align-items:center;margin-top:9px}
 .btn-row.wrap .btn{flex:1 1 auto;min-width:120px}
 .row-gap{display:flex;gap:8px;flex-wrap:wrap}
 

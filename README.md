@@ -222,8 +222,9 @@
 ### 文案助手（字幕从哪来）
 
 - **本地模板**（默认，不联网、不要 Key）：按「主题 + 风格（科普/热血/俏皮/诗性）+ 段数」拼出片名和每段字幕，同主题每次一样，方便反复调
-- **AI 通道**：填 Base / Key / 模型（DeepSeek / OpenAI / 硅基流动 / Moonshot / 自建），走 OpenAI 兼容的 `/chat/completions`。Key 只写进你自己浏览器的 localStorage，不经过本站任何服务器
-- 有些服务不给浏览器跨域（CORS），直连会失败——把 `workers/proxy.js` 贴到一个 Cloudflare Worker，Base 填 worker 地址就行
+- **AI 通道**：填 Base / Key / 模型（DeepSeek / OpenAI / 硅基流动 / Moonshot / 火山方舟豆包 / 自建），走 OpenAI 兼容的 `/chat/completions`。Key 只写进你自己浏览器的 localStorage，不经过本站任何服务器
+- **「模型」那个框是个下拉**：填完 Key（或切到某个服务商）会自动拉一次 `/models`，把这个 Key 已开通的模型、控制台建的接入点（`ep-…`）全列出来，中文备注直接显示（豆包 Seed 2.0 / DeepSeek R1 / 自建接入点…），点一下就填；你现在手上的模型名不会被顶掉，空着才自动选第一个。清单只存本机 7 天，离线也能选
+- 有些服务不给浏览器跨域（CORS），直连会失败——把 `workers/proxy.js` 贴到一个 Cloudflare Worker，Base 填 worker 地址就行（拉模型清单如果也 403，点「拉这个 Key 已开通的模型」会给同样的提示）
 - 「给个每段拍数建议」会按最长一段的字数算一个不撞帧的拍数
 
 ### 配乐从哪来

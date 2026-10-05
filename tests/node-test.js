@@ -999,8 +999,81 @@ FS.renderScore(fscParsed, { sampleRate: 22050 }).then((buf) => {
       !!FS.world.placeById(s.place) && s.cast.length > 0 && !!s.shot && !!s.shot.type);
   })());
 
-  section('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败');
-  process.exit(fail ? 1 : 0);
+/* ---------- 14. 模型清单：填了 Key 就把这个账号已开通的模型列出来 ---------- */
+section('14. 模型清单（已开通 / 已建接入点）');
+
+ok('OpenAI 标准 {data:[{id}]} 能解析', (() => {
+  const l = FS.script.parseModelList(JSON.stringify({ object: 'list', data: [
+    { id: 'doubao-seed-2-0-code-preview-260215' }, { id: 'doubao-seed-1-6-250415' }] }));
+  return l.length === 2 && l[0].id === 'doubao-seed-2-0-code-preview-260215' && /豆包 Seed 2\.0/.test(l[0].label);
+})());
+ok('方舟自建接入点 ep- 有人话标注', (() => {
+  const l = FS.script.parseModelList(JSON.stringify({ data: [
+    { id: 'ep-20240601-abc', owned_by: 'volcengine' }, { id: 'doubao-pro-32k' }] }));
+  return l.length === 2 && /接入点/.test(l[0].label) && /豆包/.test(l[1].label);
+})());
+ok('字符串数组 / name 字段 / 裸数组都能解析', (() => {
+  const a = FS.script.parseModelList('["deepseek-chat","deepseek-reasoner"]');
+  const b = FS.script.parseModelList(JSON.stringify({ data: [{ name: 'gpt-4o-mini' }] }));
+  const c = FS.script.parseModelList('[{"id":"kimi-k2"}]');
+  return a.length === 2 && b.length === 1 && c.length === 1 && c[0].id === 'kimi-k2';
+})());
+ok('重复 id 只留一个', FS.script.parseModelList('[{"id":"a"},{"id":"a"},{"id":"b"}]').length === 2);
+ok('非 JSON 给人话错误',
+  throws(() => FS.script.parseModelList('<html>oops'), '非 JSON') === null,
+  throws(() => FS.script.parseModelList('<html>oops'), '非 JSON') || '');
+ok('空清单说清楚是没开通',
+  throws(() => FS.script.parseModelList('{"data":[]}'), '空的') === null);
+ok('上游 error 原文透出来',
+  throws(() => FS.script.parseModelList('{"error":{"message":"quota exceeded"}}'), 'quota exceeded') === null);
+ok('normalizeBase 容错（方舟 /api/v3 不误补 /v1，裸域名补 /v1）', (() => {
+  const n = FS.script.normalizeBase;
+  return n('https://ark.cn-beijing.volces.com/api/v3') === 'https://ark.cn-beijing.volces.com/api/v3'
+    && n('https://api.deepseek.com/v1') === 'https://api.deepseek.com/v1'
+    && n('https://api.siliconflow.cn') === 'https://api.siliconflow.cn/v1'
+    && n('https://x/v1///') === 'https://x/v1';
+})());
+ok('没有 localStorage 时缓存读写不炸', (() => {
+  FS.script.writeModelCache('https://x/v1', [{ id: 'a', label: 'A' }]);
+  return FS.script.readModelCache('https://x/v1') === null;
+})());
+
+// listModels 走网络，用假 fetch 顶上（node 22 自带 fetch，测完还原）
+const realFetch = global.fetch;
+function stub(res) {
+  global.fetch = function () {
+    return Promise.resolve(res
+      ? { status: res.status || 200, text: () => Promise.resolve(res.body || '') }
+      : Promise['reject'](new TypeError('Failed to fetch')));
+  };
+}
+const listMsg = function (cfg) {
+  return FS.script.listModels(cfg).then(() => '', (e) => (e && e.message) || String(e));
+};
+(async function testListModels() {
+  ok('没填 Key 直接拒绝', (await listMsg({ base: 'https://x/v1' })) === '先填 API Key');
+  ok('Base 空白直接拒绝', (await listMsg({ key: 'sk-x' })) === 'Base 地址还是空的');
+  stub({ status: 401 });
+  ok('401 说 Key 被拒 / 没权限', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('Key 被拒') === 0);
+  stub({ status: 404 });
+  ok('404 提示 base 填错了', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('404') === 0);
+  stub({ status: 500 });
+  ok('500 报上游拒绝', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('上游拒绝') === 0);
+  stub(null);
+  ok('CORS 被拦时给办法不是堆栈', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('proxy.js') > 0);
+  stub({ status: 200, body: JSON.stringify({ data: [{ id: 'a' }, { id: 'b' }] }) });
+  const got = await FS.script.listModels({ base: 'https://x/v1', key: 'sk-x' });
+  ok('正常返回模型清单', Array.isArray(got) && got.length === 2 && got[0].id === 'a');
+  global.fetch = realFetch;
+})()
+  .then(() => {
+    section('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败');
+    process.exit(fail ? 1 : 0);
+  })
+  .catch((e) => {
+    console.log('  ✗ 模型清单那段抛错: ' + e.message);
+    process.exit(1);
+  });
 }).catch((e) => {
   console.log('  ✗ 渲染抛错: ' + e.message);
   process.exit(1);

@@ -562,11 +562,13 @@ ok('LLM 段落数超出文案时不会多出镜头', (() => {
   return merged.shots.length === sb.shots.length;
 })());
 /* 接火山方舟豆包（Doubao-Seed-2.0-Code）后加的：预设 + URL 拼装 + 新地点白名单 */
-ok('服务商预设里有火山方舟豆包', (() => {
-  // 2026-10-05：不再预设具体模型名（方舟按账号授权，预设一个多半没开通的模型
-  // 就会一直 401）。改成模型留空 + 靠「拉已开通模型」自动填。
+ok('服务商预设里有火山方舟豆包，且带一个豆包默认模型', (() => {
+  // 2026-10-05 第二轮：模型留空会让用户随手填 deepseek-chat → 方舟 404。
+  // 改成预设直接带一个「大概率已开通」的豆包模型；一旦拉到账号真实清单，
+  // 清单会盖掉这个猜测值（见 pickFromList / fillModelPicker 的 force 分支）。
   const p = FS.script.PRESETS.filter((x) => x.id === 'ark')[0];
-  return !!(p && p.base === 'https://ark.cn-beijing.volces.com/api/v3' && p.model === '');
+  return !!(p && p.base === 'https://ark.cn-beijing.volces.com/api/v3'
+    && p.model === FS.script.DEFAULT_ARK_MODEL && /doubao/.test(p.model));
 })());
 ok('方舟「走本站代理」预设排在第一位（直连必被 CORS 拦）', (() => {
   const f = FS.script.PRESETS.filter((x) => x.id === 'local-ark')[0];
@@ -1418,7 +1420,21 @@ const listMsg = function (cfg) {
     ok('API 设置的下拉里能选到「走本站代理」预设', opts.indexOf('local-ark') >= 0,
       '(' + opts.join(',') + ')');
     ok('代理预设排在下拉第一位（开箱默认就是它）', opts[0] === 'local-ark');
-    ok('API 设置区写明了 ai.php 中转这回事', /ai\.php/.test(html));
+    // 2026-10-05 第二轮：那段「接豆包 / 方舟 401 三条 / Cloudflare Worker」的长篇说明
+    // 用户反馈是鸡肋，整块删了。这里改成守住「不许再长回来」+ 下拉自己说明是代理。
+    ok('下拉选项自己写明了是走本站代理', /火山方舟 豆包（走本站代理/.test(html));
+    ok('那段长篇科普说明已删除，没长回来',
+      !/接豆包 \//.test(html) && !/方舟 401 就这三条/.test(html) && !/workers\/proxy\.js/.test(html));
+    ok('模型框的占位字是豆包（不再是 deepseek-chat 误导人）', (() => {
+      const mi = /<input[^>]*id="sw-model"[^>]*>/.exec(html);
+      return !!mi && /doubao-/.test(mi[0]) && !/deepseek-chat/.test(mi[0]);
+    })());
+    // 光有默认值不够：方舟按账号授权，"猜的默认值"和"账号真开通过的"常常不是同一个。
+    // 所以拉到清单时必须能把猜的值换掉（force 分支），否则等于没做。
+    ok('方舟系预设：拉到的真实模型会盖掉预设里猜的默认值', (() => {
+      const m = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8');
+      return /fillModelPicker\(list,\s*isArkPreset\(\)\)/.test(m) && /function pickFromList/.test(m);
+    })());
   })();
 
   // ⑤ ai.php 拼上游 URL 必须带版本段 —— 曾经的真实 bug：裸拼 "https://$host$path"，

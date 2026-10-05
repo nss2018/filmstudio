@@ -1373,6 +1373,18 @@
     if (!m) return false;
     return /^ep-/i.test(m) || /doubao/i.test(m) || /-\d{6}$/.test(m);
   }
+  /** 从「账号已开通的模型清单」里挑一个最该当默认的：ep- 推理接入点优先
+   *  （那是自己控制台建过、必定有权限的），否则就第一个。 */
+  function pickFromList(list) {
+    var arr = (list || []).filter(function (m) { return m && m.id; });
+    if (!arr.length) return '';
+    var ep = arr.filter(function (m) { return /^ep-/i.test(String(m.id)); });
+    return String((ep[0] || arr[0]).id);
+  }
+  function isArkPreset() {
+    var v = $('sw-preset') ? $('sw-preset').value : '';
+    return v === 'ark' || v === 'local-ark';
+  }
   function applyPreset(id) {
     var p = FS.script.PRESETS.filter(function (x) { return x.id === id; })[0];
     if (!p) return;
@@ -1381,14 +1393,18 @@
     // 方舟系预设只继承「看着像方舟」的模型，别把 deepseek-chat 这种带过去撞 404
     var keep = arkLike ? (looksArkModel(cfg.model) ? cfg.model : '') : cfg.model;
     $('sw-model').value = p.model || keep || '';
-    // 方舟按账号授权模型：预设里那个预览模型（doubao-seed-2-0-code-preview）不是每个账号都有，
-    // 撞上去就是 401。查到清单就优先用 ep- 推理接入点——那是你自己在控制台建过、必定有权限的。
-    // 走本站 ai.php 代理那条预设（local-ark）模型本来就是空的，同样吃这个兜底。
-    if (p.id === 'ark' || p.id === 'local-ark') {
+    // 占位字跟着服务商走：方舟系别再把 deepseek-chat 摆在那儿误导人
+    if ($('sw-model')) {
+      $('sw-model').placeholder = arkLike ? FS.script.DEFAULT_ARK_MODEL
+        : (p.model || '模型名，比如 deepseek-chat');
+    }
+    // 账号真实开通的模型 > 预设里猜的默认值：本地缓存里有清单就按清单挑一个。
+    // 方舟按账号授权模型（写错一个字就是 401/404），所以这一步比猜名字靠谱得多。
+    if (arkLike) {
       var cached = null;
       try { cached = FS.script.readModelCache(p.base); } catch (e) {}
-      var ep = (cached || []).filter(function (m) { return m && /^ep-/.test(String(m.id)); });
-      if (ep.length) $('sw-model').value = ep[0].id;
+      var pick = pickFromList(cached);
+      if (pick) $('sw-model').value = pick;
     }
   }
   $('sw-preset').addEventListener('change', function () { cfg.preset = this.value; applyPreset(this.value); pullModels(true); });
@@ -1422,10 +1438,12 @@
     };
   }
 
-  /** [{id,label}] 塞进 datalist。已经填了（上次选的 / 手打的）就别动，空着才替他选第一个。 */
-  function fillModelPicker(list) {
+  /** [{id,label}] 塞进 datalist。已经填了（上次选的 / 手打的）就别动，空着才替他选第一个。
+   *  force=true（方舟系预设）：当前填的这个不在「账号已开通」清单里就直接换成清单里的
+   *  ——写完真实模型名照样 401，不如替你选个能用的。 */
+  function fillModelPicker(list, force) {
     var dl = $('sw-model-list'), inp = $('sw-model');
-    if (!dl || !inp) return { n: 0, cur: '', inList: false };
+    if (!dl || !inp) return { n: 0, cur: '', inList: false, replaced: false };
     var cur = (inp.value || '').trim();
     dl.innerHTML = '';
     (list || []).forEach(function (m) {
@@ -1435,13 +1453,19 @@
       dl.appendChild(o);
     });
     var inList = !!cur && (list || []).some(function (m) { return m.id === cur; });
-    if (!cur && list && list.length) {
-      // 空着就替他选。方舟是按账号授权模型的（写错一个字就是 401），
+    var replaced = false;
+    if (list && list.length && (!cur || (force && !inList))) {
+      // 方舟是按账号授权模型的（写错一个字就是 401），
       // 所以有「推理接入点 ep-」就优先它——那是自己控制台建过、肯定有权限的
-      var ep = (list || []).filter(function (m) { return m && /^ep-/.test(String(m.id)); });
-      inp.value = (ep[0] || list[0]).id;
+      var pick = pickFromList(list);
+      if (pick && pick !== cur) {
+        inp.value = pick;
+        replaced = !!cur;               // 是「换掉了原来填的」，不是「头一次自动填」
+        cfg.model = pick;
+        FS.script.saveCfg(cfg);
+      }
     }
-    return { n: (list || []).length, cur: cur, inList: inList };
+    return { n: (list || []).length, cur: cur, inList: inList, replaced: replaced };
   }
 
   /** 手打的模型名也留个档（下次下拉里还能翻出来，最多 8 条） */
@@ -1481,10 +1505,12 @@
     if (btn) btn.disabled = true;
     if (!quiet) modelTip('正在查…');
     FS.script.listModels({ base: base, key: k }).then(function (list) {
-      var r = fillModelPicker(list);
+      var r = fillModelPicker(list, isArkPreset());
       FS.script.writeModelCache(base, list);
-      var msg = '✓ 这个 Key 可调用 ' + r.n + ' 个模型' + (r.cur && !r.inList ? '（你填的 ' + r.cur + ' 不在里头，注意别写错）' : '');
-      modelTip(msg, r.cur && !r.inList ? 'bad' : 'ok');
+      var msg = '✓ 这个 Key 可调用 ' + r.n + ' 个模型';
+      if (r.replaced) msg += '（已替你改成 ' + $('sw-model').value.trim() + '）';
+      else if (r.cur && !r.inList) msg += '（你填的 ' + r.cur + ' 不在里头，注意别写错）';
+      modelTip(msg, (r.cur && !r.inList && !r.replaced) ? 'bad' : 'ok');
       if (quiet) hint($('sw-status'), '✓ 已列出这个 Key 的 ' + r.n + ' 个可用模型，在「模型」下拉里直接选', 'ok');
     })['catch'](function (e) {
       modelTip('✗ ' + e.message);

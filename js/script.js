@@ -205,16 +205,20 @@
    * 所以纯静态页直连必被 CORS 拦死，模型名填对了也没用。
    * 这个预设让 Base 指向本站 ai.php，由服务器转发，Key 仍只存在浏览器本地。 */
   var LOCAL_PROXY = 'ai.php';
+  /* 方舟系预设的默认模型：给一个「大概率已开通」的豆包模型，免得模型框空着、
+   * 用户随手填个 deepseek-chat 撞 404。只要填了 Key，「拉模型」会自动换成
+   * 你账号真实开通的那一串（有 ep- 推理接入点优先）。 */
+  var DEFAULT_ARK_MODEL = 'doubao-seed-2-0-lite-260428';
   var PRESETS = [
     { id: 'local-ark', name: '火山方舟 豆包（走本站代理 · 推荐）', base: LOCAL_PROXY,
-      model: '', via: 'ark.cn-beijing.volces.com' },
+      model: DEFAULT_ARK_MODEL, via: 'ark.cn-beijing.volces.com' },
     { id: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
     { id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
     { id: 'silicon', name: '硅基流动', base: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
     { id: 'moonshot', name: 'Moonshot', base: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
     // 火山方舟直连（留给「已经挂了 Cloudflare Worker」的场合）
     { id: 'ark', name: '火山方舟 豆包（直连 · 仅当已配代理时）', base: 'https://ark.cn-beijing.volces.com/api/v3',
-      model: '' },
+      model: DEFAULT_ARK_MODEL },
     { id: 'custom', name: '自定义', base: '', model: '' }
   ];
 
@@ -424,7 +428,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
       body: JSON.stringify({
-        model: cfg.model || (/volces|ark\.cn/i.test(base) ? 'doubao-seed-1-6-251015' : 'deepseek-chat'),
+        model: cfg.model || (/volces|ark\.cn/i.test(base) ? DEFAULT_ARK_MODEL : 'deepseek-chat'),
         temperature: 0.9,
         messages: [{ role: 'user', content: promptStr }]
       }),
@@ -621,6 +625,7 @@
     normalizeBase: normalizeBase,
     advice: advice, PRESETS: PRESETS, MOODS: MOODS,
     isProxyBase: isProxyBase, proxyUrl: proxyUrl, proxyOrigin: proxyOrigin, LOCAL_PROXY: LOCAL_PROXY,
+    DEFAULT_ARK_MODEL: DEFAULT_ARK_MODEL,
     loadCfg: loadCfg, saveCfg: saveCfg,
     // 给测试用
     _rng: rng, _fnv: fnv

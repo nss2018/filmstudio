@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>科普宣传片工坊 · 配乐 + 渲染，一处出片</title>
-<link rel="stylesheet" href="css/app.css?v=20261005l">
+<link rel="stylesheet" href="css/app.css?v=20261005m">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
@@ -214,24 +214,13 @@
               </label>
               <label class="fl">Base（OpenAI 兼容）<input type="text" id="sw-base" placeholder="https://api.deepseek.com/v1"></label>
               <label class="fl">Key<input type="password" id="sw-key" placeholder="sk-…" autocomplete="off"></label>
-              <label class="fl">模型<input type="text" id="sw-model" list="sw-model-list" placeholder="deepseek-chat" autocomplete="off"></label>
+              <label class="fl">模型<input type="text" id="sw-model" list="sw-model-list" placeholder="doubao-seed-2-0-lite-260428" autocomplete="off"></label>
             </div>
             <datalist id="sw-model-list"></datalist>
             <div class="btn-row inline">
               <button id="sw-list" class="btn"><svg class="ico"><use href="#i-list"/></svg>拉这个 Key 已开通的模型</button>
               <span class="mono dim" id="sw-models">还没查过这个 Key 能调哪些模型</span>
             </div>
-            <div class="hint"><b>接豆包 / 火山方舟：选「火山方舟 豆包（走本站代理 · 推荐）」，把 Key 粘进去就行。</b><br>
-              火山方舟<b>明令禁止浏览器直连</b>——它连 <code>Access-Control-Allow-Origin</code> 都不返回，纯静态页直连必被浏览器按 CORS 拦掉（模型名填得再对也没用）。所以本站自带一个 <code>ai.php</code> 中转：选这个预设后 Base 会变成 <code>ai.php</code>，请求先到本站服务器、由它转发给方舟，同源就不存在跨域问题。<b>Key 依然只存在你浏览器本地</b>（localStorage，不进代码、不进 Git），只随这一次请求转发给上游，<b>服务器不落盘、不写日志</b>。<br>
-              Key 从
-              <a href="https://console.volcengine.com/ark/api_key" target="_blank" rel="noopener">方舟控制台 → API Key 管理</a>
-              复制粘进 Key 框（打开页面时会自动回填上次存的），再点「拉这个 Key 已开通的模型」——<b>你账号已开通 / 已建好的模型会直接列进「模型」下拉</b>，不用去控制台抄名字；换 Key 或换服务商时点一下那个按钮重拉。<br>
-              <span class="dim">选其它服务商（DeepSeek / OpenAI / 硅基流动 …）走的是<b>浏览器直连</b>，Base 填它自己的地址，不过本站服务器。</span><br>
-              <b style="color:#b4432a">方舟 401 就这三条，挨个看：</b><br>
-              ① <b>别拿错 Key。</b>方舟有两套密钥：控制台「密钥管理」里的 <code>AccessKey / SecretKey</code>（<code>AKLT</code> 开头，要 HMAC 签名，Bearer 不认它）和<b>方舟控制台 → API Key 管理</b>里的 <b>API Key</b>（直接当 Bearer 用的那串）。这里要后者。<br>
-              ② <b>Base 必须以 <code>/api/v3</code> 结尾</b>：<code>https://ark.cn-beijing.volces.com/api/v3</code>，不是 <code>/v1</code>。<br>
-              ③ <b>模型要选你账号开通过的那个</b>。方舟按账号授权模型，模型名写错/没开通（哪怕写成 <code>doubao-seed-2-1-pro</code> 这种官方名字）都会 401。点「拉这个 Key 已开通的模型」，<b>有 <code>ep-</code> 开头的「推理接入点」优先选它</b>（那是你自己在控制台建过、必定有权限）。<br>
-              <span class="dim">万一别的服务商也不给跨域（CORS）：把仓库里的 <code>workers/proxy.js</code> 贴到一个 Cloudflare Worker，Base 填那个 worker 地址即可。<b>豆包不用这么做</b>——上面的 <code>ai.php</code> 已经代办了。</span></div>
           </div>
         </details>
       </div>
@@ -362,30 +351,30 @@
   <span class="mono" id="probe-badge"></span>
 </footer>
 
-<script src="js/theme.js?v=20261005l"></script>
-<script src="js/score.js?v=20261005l"></script>
-<script src="js/wav.js?v=20261005l"></script>
-<script src="js/synth.js?v=20261005l"></script>
-<script src="js/story.js?v=20261005l"></script>
-<script src="js/factory.js?v=20261005l"></script>
-<script src="js/gl/core.js?v=20261005l"></script>
-<script src="js/gl/lru.js?v=20261005l"></script>
-<script src="js/gl/geom.js?v=20261005l"></script>
-<script src="js/gl/camera.js?v=20261005l"></script>
-<script src="js/gl/world.js?v=20261005l"></script>
-<script src="js/gl/cast.js?v=20261005l"></script>
-<script src="js/gl/render.js?v=20261005l"></script>
-<script src="js/director.js?v=20261005l"></script>
-<script src="js/gl/world2.js?v=20261005l"></script>
-<script src="js/gl/world3.js?v=20261005l"></script>
-<script src="js/scene2d/core.js?v=20261005l"></script>
-<script src="js/scene2d/scenes.js?v=20261005l"></script>
-<script src="js/scene2d/scenes2.js?v=20261005l"></script>
-<script src="js/scene2d/scenes3.js?v=20261005l"></script>
-<script src="js/scene2d/pick.js?v=20261005l"></script>
-<script src="js/roll.js?v=20261005l"></script>
-<script src="js/scoresync.js?v=20261005l"></script>
-<script src="js/script.js?v=20261005l"></script>
-<script src="js/main.js?v=20261005l"></script>
+<script src="js/theme.js?v=20261005m"></script>
+<script src="js/score.js?v=20261005m"></script>
+<script src="js/wav.js?v=20261005m"></script>
+<script src="js/synth.js?v=20261005m"></script>
+<script src="js/story.js?v=20261005m"></script>
+<script src="js/factory.js?v=20261005m"></script>
+<script src="js/gl/core.js?v=20261005m"></script>
+<script src="js/gl/lru.js?v=20261005m"></script>
+<script src="js/gl/geom.js?v=20261005m"></script>
+<script src="js/gl/camera.js?v=20261005m"></script>
+<script src="js/gl/world.js?v=20261005m"></script>
+<script src="js/gl/cast.js?v=20261005m"></script>
+<script src="js/gl/render.js?v=20261005m"></script>
+<script src="js/director.js?v=20261005m"></script>
+<script src="js/gl/world2.js?v=20261005m"></script>
+<script src="js/gl/world3.js?v=20261005m"></script>
+<script src="js/scene2d/core.js?v=20261005m"></script>
+<script src="js/scene2d/scenes.js?v=20261005m"></script>
+<script src="js/scene2d/scenes2.js?v=20261005m"></script>
+<script src="js/scene2d/scenes3.js?v=20261005m"></script>
+<script src="js/scene2d/pick.js?v=20261005m"></script>
+<script src="js/roll.js?v=20261005m"></script>
+<script src="js/scoresync.js?v=20261005m"></script>
+<script src="js/script.js?v=20261005m"></script>
+<script src="js/main.js?v=20261005m"></script>
 </body>
 </html>

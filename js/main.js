@@ -1388,13 +1388,35 @@
     if (!m) return false;
     return /^ep-/i.test(m) || /doubao/i.test(m) || /-\d{6}$/.test(m);
   }
-  /** 从「账号已开通的模型清单」里挑一个最该当默认的：ep- 推理接入点优先
-   *  （那是自己控制台建过、必定有权限的），否则就第一个。 */
-  function pickFromList(list) {
+  /** 从「账号已开通的模型清单」里挑一个最该当默认的。
+   *  ⚠️ 绝不能「取第一个」——实测某 Key 的 /models 返回 135 个，是**按上线时间排的**，
+   *     第一个是 doubao-lite-128k-240428（2024 年的老古董），拿它当默认等于坑用户。
+   *  优先级：① ep- 推理接入点（自己控制台建的，必定有权限）
+   *          ② 清单里就有 DEFAULT_ARK_MODEL（实测能跑的那个）
+   *          ③ 版本号最大的豆包 Seed / Pro 系
+   *         ④ 兜底第一个非 embedding、非过时款
+   */
+  function pickModelFrom(list) {
     var arr = (list || []).filter(function (m) { return m && m.id; });
     if (!arr.length) return '';
-    var ep = arr.filter(function (m) { return /^ep-/i.test(String(m.id)); });
-    return String((ep[0] || arr[0]).id);
+    var has = function (re) { return arr.filter(function (m) { return re.test(String(m.id)); }); };
+    var ep = has(/^ep-/i);
+    if (ep.length) return String(ep[0].id);
+    var def = FS.script.DEFAULT_ARK_MODEL;
+    if (arr.some(function (m) { return m.id === def; })) return def;
+    // 豆包 Seed / Pro / turbo 系里取「版本号最大」的：-2-1- > -2-0- > -1-8- > -1-6-
+    var seeds = has(/doubao-seed-\d+-\d+|doubao-\d+-\d+-(pro|thinking)/i);
+    if (seeds.length) {
+      var ver = function (id) {
+        var m = /(\d+)[.\-_](\d+)/.exec(String(id));
+        return m ? (+m[1]) * 100 + (+m[2]) : -1;
+      };
+      var best = seeds[0], bv = ver(best.id);
+      seeds.forEach(function (m) { var v = ver(m.id); if (v > bv) { bv = v; best = m; } });
+      return String(best.id);
+    }
+    var ok = arr.filter(function (m) { return !/embedding|rerank|tts|asr|ocr/i.test(String(m.id)); });
+    return String((ok[0] || arr[0]).id);
   }
   function isArkPreset() {
     var v = $('sw-preset') ? $('sw-preset').value : '';
@@ -1418,7 +1440,7 @@
     if (arkLike) {
       var cached = null;
       try { cached = FS.script.readModelCache(p.base); } catch (e) {}
-      var pick = pickFromList(cached);
+      var pick = pickModelFrom(cached);
       if (pick) $('sw-model').value = pick;
     }
   }
@@ -1472,7 +1494,7 @@
     if (list && list.length && (!cur || (force && !inList))) {
       // 方舟是按账号授权模型的（写错一个字就是 401），
       // 所以有「推理接入点 ep-」就优先它——那是自己控制台建过、肯定有权限的
-      var pick = pickFromList(list);
+      var pick = pickModelFrom(list);
       if (pick && pick !== cur) {
         inp.value = pick;
         replaced = !!cur;               // 是「换掉了原来填的」，不是「头一次自动填」

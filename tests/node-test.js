@@ -577,11 +577,30 @@ ok('方舟「走本站代理」预设排在第一位（直连必被 CORS 拦）'
 })());
 // 兜底模型名只允许有一个来源：DEFAULT_ARK_MODEL。曾经同一份 script.js 里
 // 代理路径写 1-6、直连路径写 2-0-lite，两处不一致 → 用户按框里名字试就 401。
-ok('方舟兜底模型只有一个来源（不许散落硬编码模型名）', (() => {
-  const src = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'script.js'), 'utf8');
-  const uniq = [...new Set(src.match(/doubao-seed-[A-Za-z0-9-]+/g) || [])];
-  return uniq.length === 1 && uniq[0] === FS.script.DEFAULT_ARK_MODEL;
-})());
+    ok('方舟兜底模型只有一个来源（不许散落硬编码模型名）', (() => {
+      const src = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'script.js'), 'utf8');
+      const uniq = [...new Set(src.match(/doubao-seed-[A-Za-z0-9-]+/g) || [])];
+      return uniq.length === 1 && uniq[0] === FS.script.DEFAULT_ARK_MODEL;
+    })());
+    // 2026-10-05：默认模型必须是**真调通过**的那个 id（拿用户自己的 Key 实测 200/2.4s），
+    // 而不是拍脑袋写一个。真调过一次的是 doubao-seed-2-0-code-preview-260215。
+    ok('默认模型是实测能跑通的那个豆包 id', /^doubao-seed-2-0-code/.test(FS.script.DEFAULT_ARK_MODEL),
+      '(' + FS.script.DEFAULT_ARK_MODEL + ')');
+    ok('下拉里那个模型有专门的人话备注', (() => {
+      const src = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'script.js'), 'utf8');
+      return /2\[\.\\-_\]\?0\[\.\\-_\]\?code/.test(src) && /写脚本/.test(src);
+    })());
+    // ⚠️ 选模型**不能「取第一个」**：实测某 Key 的 /models 返回 135 个、按上线时间排，
+    //    第一个是 doubao-lite-128k-240428（2024 年老古董）。这里拿真实清单的前几项复现。
+    ok('挑模型不靠「取第一个」（否则会选中 2024 年的老古董）', (() => {
+      const m = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8');
+      const fn = /function pickModelFrom\(list\)\s*\{[\s\S]*?\n  \}/.exec(m);
+      if (!fn) return false;
+      const body = fn[0];
+      // 允许 `arr[0]` 出现在最后的兜底里，但不允许 `ep[0] || arr[0]` 这种"第一个说了算"
+      return /DEFAULT_ARK_MODEL/.test(body) && !/arr\[0\]\s*\)\s*;?\s*$/.test(body.trim().replace(/\}\s*$/, ''))
+        && !/ep\[0\]\s*\|\|\s*arr\[0\]/.test(body);
+    })());
 ok('isProxyBase 认得 ai.php、认不得普通地址', (() => {
   const f = FS.script.isProxyBase;
   return f('ai.php') && f('/filmstudio/ai.php') && !f('https://api.deepseek.com/v1') && !f('');
@@ -1440,7 +1459,7 @@ const listMsg = function (cfg) {
     // 所以拉到清单时必须能把猜的值换掉（force 分支），否则等于没做。
     ok('方舟系预设：拉到的真实模型会盖掉预设里猜的默认值', (() => {
       const m = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8');
-      return /fillModelPicker\(list,\s*isArkPreset\(\)\)/.test(m) && /function pickFromList/.test(m);
+      return /fillModelPicker\(list,\s*isArkPreset\(\)\)/.test(m) && /function pickModelFrom/.test(m);
     })());
   })();
 

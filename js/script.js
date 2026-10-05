@@ -229,10 +229,10 @@
    * 所以纯静态页直连必被 CORS 拦死，模型名填对了也没用。
    * 这个预设让 Base 指向本站 ai.php，由服务器转发，Key 仍只存在浏览器本地。 */
   var LOCAL_PROXY = 'ai.php';
-  /* 方舟系预设的默认模型：给一个「大概率已开通」的豆包模型，免得模型框空着、
-   * 用户随手填个 deepseek-chat 撞 404。只要填了 Key，「拉模型」会自动换成
-   * 你账号真实开通的那一串（有 ep- 推理接入点优先）。 */
-  var DEFAULT_ARK_MODEL = 'doubao-seed-2-0-lite-260428';
+  /* 方舟系预设的默认模型：**用实测能跑通的那个 id**（拿自家 Key 真调过一次，
+   * 200 / 2.4s / 正常回 JSON）。填了 Key 后「拉模型」会换成你账号真实开通的清单，
+   * 挑不出更好的才留这个（见 main.js 的 pickModelFrom）。 */
+  var DEFAULT_ARK_MODEL = 'doubao-seed-2-0-code-preview-260215';
   var PRESETS = [
     { id: 'local-ark', name: '火山方舟 豆包（走本站代理 · 推荐）', base: LOCAL_PROXY,
       model: DEFAULT_ARK_MODEL, via: 'ark.cn-beijing.volces.com' },
@@ -517,7 +517,8 @@
   /** 模型名 → 人话备注（下拉里显示这个，填进请求的是 option 的 value） */
   var MODEL_TAGS = [
     [/^ep-/, '自建接入点（控制台建的应用）'],
-    [/seed-?2[.\-_]?0/, '豆包 Seed 2.0 · 最新旗舰（推理/长文）'],
+    [/2[.\-_]?0[.\-_]?code|code-?preview/, '豆包 Seed 2.0 Code · 写脚本（本项目默认）'],
+    [/seed-?2[.\-_]?1|seed-?2[.\-_]?0/, '豆包 Seed 2.0 · 最新旗舰（推理/长文）'],
     [/seed-?1[.\-_]?6|seed-?1[.\-_]?5/, '豆包 Seed 1.6/1.5 · 视觉理解'],
     [/doubao-?lite|doubao-lite/i, '豆包 Lite · 便宜快'],
     [/doubao-?pro|doubao-pro/i, '豆包 Pro · 均衡'],

@@ -272,11 +272,72 @@
     return content;
   }
 
+  /* ---------------- 把上游的拒绝翻成人话 ----------------
+   * 原来 401 只丢一句「检查 Key 和 base 地址」，等于让人盲猜。
+   * 方舟这类网关其实会回 code + message（AuthenticationError / does not have permission …），
+   * 不把它挖出来，用户根本分不清「Key 填错」和「模型没开通」——这俩的修法完全不一样。
+   * 做成纯函数（ deniesTip / upstreamMsg ）方便直接断言。 */
+
+  /** 按状态码给一句人话定性 */
+  function denyWord(status) {
+    if (status === 401) return '鉴权被拒（Key 没通过）';
+    if (status === 403) return '没权限';
+    if (status === 404) return '路径不存在';
+    if (status === 429) return '被限流';
+    if (status >= 500) return '上游报错';
+    return '请求被拒';
+  }
+
+  /** 针对「谁被拒了」给具体的下一步。纯函数。 */
+  function denyTip(status, base, model, txt) {
+    var low = String(txt || '').toLowerCase();
+    if (/InvalidAccountStatus|account status|实名|欠费|arrear|out of credit|balance/i.test(low))
+      return '你的账号状态有问题（没实名 / 欠费 / 被停用），先去 console.volcengine.com 处理再调。';
+    if (status === 401 || status === 403) {
+      if (/volces|ark\.cn/i.test(base || '')) {
+        // 方舟的两大坑：① 拿 IAM 的 AK/SK 当 API Key；② 模型没开通
+        var p = ['方舟要的是「API Key 管理」里创建的 Key（sk- 开头）——不是控制台「密钥管理」里的 AccessKey/SecretKey（AKLT 开头），后者要 HMAC 签名，Bearer 不认它'];
+        var m = String(model || '').trim();
+        if (!m) p.push('模型框还是空的，它会拿默认值去撞墙——点「拉这个 Key 已开通的模型」，从下拉里挑一个');
+        else if (/^ep-/.test(m)) p.push(/invalid|not valid|unauthorized|authentication|expired/i.test(low)
+          ? '上游说的是 Key 本身不对：去「API Key 管理」确认这串 Key 还在（被删 / 过期 / 复制时缺头尾都会这样）'
+          : 'Key 本身看着没问题，但这个 ep- 接入点没授权给这个 Key（或者被停用/删了），去方舟控制台「推理接入点」看一眼');
+        else p.push('这次传的模型是「' + m + '」，方舟是按账号授权模型的，这个模型你的 Key 没开通——点「拉这个 Key 已开通的模型」，从下拉里挑一个（有 ep- 开头的接入点优先选它）');
+        return p.join('；') + '。';
+      }
+      return 'Key 不对 / 过期 / 被删了，或者 base 地址给错了。';
+    }
+    if (status === 404) return 'base 不像 OpenAI 兼容端点，应该是 https://xxx/v1 这种（方舟是 https://ark.cn-beijing.volces.com/api/v3）。';
+    if (status === 429) return '被限流了：等一会儿再点，或者换个便宜点的模型。';
+    if (status >= 500) return '上游自己炸了，稍后再试；还不行就把上面这段原话原样发我。';
+    return '';
+  }
+
+  /** 状态码 + 上游响应体 → 一整句能照着做的报错。纯函数，测试直接调。 */
+  function upstreamMsg(status, txt, base, model, path) {
+    var s = String(txt == null ? '' : txt).replace(/\s+/g, ' ').trim();
+    var code = '', msg = '';
+    try {
+      var j = JSON.parse(s);
+      if (j && j.error) { code = String(j.error.code || ''); msg = String(j.error.message || j.error.msg || ''); }
+    } catch (e) { /* 不是 JSON 就往下捞字符串 */ }
+    if (!msg) { var m = /"message"\s*:\s*"([^"]{4,200})"/.exec(s); if (m) msg = m[1]; }
+    var bits = ['✗ ' + status + ' ' + (code ? code : denyWord(status))];
+    if (msg) bits.push('上游原话：' + msg + (code && code.indexOf(msg) < 0 ? '（' + code + '）' : ''));
+    else if (s) bits.push('上游返回：' + s.slice(0, 140));
+    var tip = denyTip(status, base, model, msg || code || s);
+    if (tip) bits.push(tip);
+    var p = path || '/chat/completions';
+    bits.push('这次实际发出去的是 ' + (base ? base : '<没填 base>') + p + (model ? '（model=' + model + '）' : ''));
+    return bits.join(' —— ');
+  }
+
   /** 通用 LLM 通道：自带 base 补全、90s 超时、401/404/CORS 的人话报错。
    *  导演层（分镜脚本）也走这个，所以 CORS 那套提示只需要维护一份。 */
   function callApi(cfg, promptStr, parseFn) {
-    if (!cfg || !cfg.key) return Promise['reject'](new Error('先填 API Key'));
-    var base = (cfg.base || '').replace(/\/+$/, '');
+    if (!cfg || !(String(cfg.key || '').trim())) return Promise['reject'](new Error('先填 API Key'));
+    var key = String(cfg.key).trim();            // 手机粘贴常带空格/换行，别让它们变成分离出去的废字符
+    var base = String(cfg.base || '').replace(/\/+$/, '').trim();
     if (!base) base = 'https://api.deepseek.com/v1';
     if (!/\/v\d+$/.test(base)) base += '/v1';       // 容错：没写版本段自动补
     var ctrl = (root.AbortController ? new root.AbortController() : null);
@@ -284,7 +345,7 @@
 
     return fetch(base + '/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
       body: JSON.stringify({
         model: cfg.model || 'deepseek-chat',
         temperature: 0.9,
@@ -293,8 +354,9 @@
       signal: ctrl ? ctrl.signal : undefined
     }).then(function (res) {
       return res.text().then(function (txt) {
-        if (res.status === 401 || res.status === 403) throw new Error('Key 被拒（' + res.status + '）—— 检查 Key 和 base 地址');
-        if (res.status === 404) throw new Error('404 —— base 地址不像 OpenAI 兼容端点，应该是 https://xxx/v1 这种');
+        if (res.status === 401 || res.status === 403) throw new Error(upstreamMsg(res.status, txt, base, cfg.model));
+        if (res.status === 404) throw new Error(upstreamMsg(res.status, txt, base, cfg.model));
+        if (res.status >= 400) throw new Error(upstreamMsg(res.status, txt, base, cfg.model));
         var j = null;
         try { j = JSON.parse(txt); } catch (err) { /* 下面 extractContent 再兜一次 */ }
         if (j && j.error) throw new Error((j.error.message || j.error.code || '上游报错'));
@@ -376,19 +438,18 @@
 
   /** 拉模型清单。返回 Promise<[{id,label}]>；401/404/CORS 都给人话。 */
   function listModels(cfg) {
-    if (!cfg || !cfg.key) return Promise['reject'](new Error('先填 API Key'));
+    if (!cfg || !(String(cfg.key || '').trim())) return Promise['reject'](new Error('先填 API Key'));
+    var key = String(cfg.key).trim();
     var base = normalizeBase(cfg.base);
     if (!base) return Promise['reject'](new Error('Base 地址还是空的'));
     var ctrl = (root.AbortController ? new root.AbortController() : null);
     var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 30000);
     function fin() { clearTimeout(timer); }
     return fetch(base + '/models', {
-      headers: { 'Authorization': 'Bearer ' + cfg.key },
+      headers: { 'Authorization': 'Bearer ' + key },
       signal: ctrl ? ctrl.signal : undefined
     }).then(function (res) {
-      if (res.status === 401 || res.status === 403) throw new Error('Key 被拒（' + res.status + '）—— 这个 Key 没开通模型或没权限列清单');
-      if (res.status === 404) throw new Error('404 —— base 不像模型清单端点（方舟填 https://ark.cn-beijing.volces.com/api/v3）');
-      if (res.status >= 400) throw new Error('上游拒绝列模型（' + res.status + '）');
+        if (res.status >= 400) throw new Error(upstreamMsg(res.status, '', base, '', '/models'));
       return res.text().then(parseModelList);
     })['catch'](function (err) {
       var msg = err && err.message ? err.message : String(err);
@@ -458,6 +519,7 @@
   FS.script = {
     local: local, llm: llm, generate: generate, parse: parse, PROMPT: PROMPT,
     callApi: callApi, extractContent: extractContent,
+    upstreamMsg: upstreamMsg, denyTip: denyTip, denyWord: denyWord,
     listModels: listModels, parseModelList: parseModelList,
     readModelCache: readModelCache, writeModelCache: writeModelCache,
     normalizeBase: normalizeBase,

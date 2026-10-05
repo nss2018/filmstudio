@@ -1151,11 +1151,14 @@ const listMsg = function (cfg) {
   ok('没填 Key 直接拒绝', (await listMsg({ base: 'https://x/v1' })) === '先填 API Key');
   ok('Base 空白直接拒绝', (await listMsg({ key: 'sk-x' })) === 'Base 地址还是空的');
   stub({ status: 401 });
-  ok('401 说 Key 被拒 / 没权限', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('Key 被拒') === 0);
+  let m401 = await listMsg({ base: 'https://x/v1', key: 'sk-x' });
+  ok('401 说清是鉴权被拒 / 没权限',
+    m401.indexOf('401') > 0 && m401.indexOf('鉴权') >= 0 && /Key 不对 \/ 过期|上游返回/.test(m401));
   stub({ status: 404 });
-  ok('404 提示 base 填错了', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('404') === 0);
+  let m404 = await listMsg({ base: 'https://x/v1', key: 'sk-x' });
+  ok('404 提示 base 填错了', m404.indexOf('404') >= 0 && /base 不像|\/v1/.test(m404));
   stub({ status: 500 });
-  ok('500 报上游拒绝', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('上游拒绝') === 0);
+  ok('500 报上游拒绝', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('上游报错') === 6);
   stub(null);
   ok('CORS 被拦时给办法不是堆栈', (await listMsg({ base: 'https://x/v1', key: 'sk-x' })).indexOf('proxy.js') > 0);
   stub({ status: 200, body: JSON.stringify({ data: [{ id: 'a' }, { id: 'b' }] }) });
@@ -1164,7 +1167,36 @@ const listMsg = function (cfg) {
   global.fetch = realFetch;
 })()
   .then(() => {
-    section('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败');
+    section('16. 鉴权报错要带上游原话 + 明确的下一步');
+  {
+    const u = FS.script.upstreamMsg, tip = FS.script.denyTip;
+    const ARK = 'https://ark.cn-beijing.volces.com/api/v3';
+    const e401 = '{"error":{"code":"AuthenticationError","message":"API key does not have permission to access this endpoint"}}';
+    const m1 = u(401, e401, ARK, 'doubao-seed-2-1-pro');
+    ok('401 把上游 code 原话透出来', /AuthenticationError/.test(m1) && /does not have permission/.test(m1));
+    ok('401 点出方舟那两套密钥别拿错', /AccessKey\/SecretKey/.test(m1) && /AKLT/.test(m1));
+    ok('401 说清这个模型没开通', /没开通/.test(m1) && /doubao-seed-2-1-pro/.test(m1));
+    ok('401 带上实际发出去的地址', m1.indexOf(ARK + '/chat/completions') > 0);
+    const m2 = u(401, e401, ARK, 'ep-20261005-zzz');
+    ok('ep- 接入点被拒 → 提示接入点没授权/停用', /接入点/.test(m2) && /停用/.test(m2));
+    const m3 = u(401, e401, ARK, '');
+    ok('模型空着 → 提示先去拉清单', /模型框还是空的/.test(m3) || /拉这个 Key 已开通的模型/.test(m3));
+    ok('非方舟 401 只说 Key 与 base', /Key 不对 \/ 过期/.test(u(401, e401, 'https://api.deepseek.com/v1', 'deepseek-chat')));
+    ok('404 提示 base 长什么样', /\/v1/.test(u(404, '', 'https://ark.cn-beijing.volces.com/api/v3')));
+    ok('429 提示限流', /限流/.test(u(429, '')) && /限流/.test(tip(429, ARK, '', '')));
+    ok('5xx 让人稍后再试并愿意收原话', /上游自己炸了/.test(u(500, '')));
+    ok('账号异常单独说（实名/欠费）',
+      /实名/.test(tip(401, ARK, '', 'InvalidAccountStatus')) || /欠费/.test(tip(401, ARK, '', 'InvalidAccountStatus')));
+    ok('非 JSON 响应体也把原文带上', /上游返回/.test(u(401, '<html>oops 401', ARK, '')));
+    ok('上游没 body 也不至于空白', /鉴权被拒/.test(u(401, '', ARK, '')));
+    ok('列模型的错写的是 /models 不是 /chat/completions',
+      u(401, e401, ARK, '', '/models').indexOf('/models') > 0
+      && u(401, e401, ARK, '', '/models').indexOf('chat/completions') < 0);
+    ok('denyWord 按状态码定性', FS.script.denyWord(401).indexOf('鉴权') >= 0
+      && FS.script.denyWord(404).indexOf('不存在') >= 0 && FS.script.denyWord(429).indexOf('限流') >= 0);
+  }
+
+  section('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败');
     process.exit(fail ? 1 : 0);
   })
   .catch((e) => {

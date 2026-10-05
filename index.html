@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>科普宣传片工坊 · 配乐 + 渲染，一处出片</title>
-<link rel="stylesheet" href="css/app.css?v=20261005g">
+<link rel="stylesheet" href="css/app.css?v=20261005h">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
@@ -222,8 +222,12 @@
             </div>
             <div class="hint">这里是<b>浏览器直连你的 API</b>，Key 只写在 localStorage，不进代码、不进 Git、不过本站任何服务器。<br>
               <b>接豆包 / 火山方舟：</b>选上面的「火山方舟 豆包 Doubao」→ Base 和模型会自动填好，把
-              <a href="https://console.volcengine.com/ark/api_key" target="_blank" rel="noopener">方舟控制台</a>
+              <a href="https://console.volcengine.com/ark/api_key" target="_blank" rel="noopener">方舟控制台 → API Key 管理</a>
               里复制的 API Key 粘进 Key 框（打开页面时它会自动回填上次存的），<b>这个 Key 已开通 / 已建好的模型会自动列在「模型」下拉里直接选</b>，不用去控制台抄名字；换 Key 或换服务商时点一下上面那个按钮重拉。<br>
+              <b style="color:#b4432a">方舟 401 就这三条，挨个看：</b><br>
+              ① <b>别拿错 Key。</b>方舟有两套密钥：控制台「密钥管理」里的 <code>AccessKey / SecretKey</code>（AKLT 开头，要 HMAC 签名，Bearer 不认它）和「API Key 管理」里的 <b>API Key</b>（<code>ep-</code>/<code>sk-</code> 那串，直接 Bearer 用）。这里要后者。<br>
+              ② <b>Base 必须以 <code>/api/v3</code> 结尾</b>：<code>https://ark.cn-beijing.volces.com/api/v3</code>，不是 <code>/v1</code>。<br>
+              ③ <b>模型要选你账号开通过的那个</b>。方舟按账号授权模型，模型名写错/没开通（哪怕写成 <code>doubao-seed-2-1-pro</code> 这种官方名字）都会 401。点「拉这个 Key 已开通的模型」，<b>有 <code>ep-</code> 开头的「推理接入点」优先选它</b>（那是你自己在控制台建过、必定有权限）。<br>
               某些服务不给浏览器跨域（CORS），直连会失败——这种情况把仓库里的 <code>workers/proxy.js</code> 贴到一个 Cloudflare Worker，Base 填那个 worker 地址就行。</div>
           </div>
         </details>
@@ -355,30 +359,30 @@
   <span class="mono" id="probe-badge"></span>
 </footer>
 
-<script src="js/theme.js?v=20261005g"></script>
-<script src="js/score.js?v=20261005g"></script>
-<script src="js/wav.js?v=20261005g"></script>
-<script src="js/synth.js?v=20261005g"></script>
-<script src="js/story.js?v=20261005g"></script>
-<script src="js/factory.js?v=20261005g"></script>
-<script src="js/gl/core.js?v=20261005g"></script>
-<script src="js/gl/lru.js?v=20261005g"></script>
-<script src="js/gl/geom.js?v=20261005g"></script>
-<script src="js/gl/camera.js?v=20261005g"></script>
-<script src="js/gl/world.js?v=20261005g"></script>
-<script src="js/gl/cast.js?v=20261005g"></script>
-<script src="js/gl/render.js?v=20261005g"></script>
-<script src="js/director.js?v=20261005g"></script>
-<script src="js/gl/world2.js?v=20261005g"></script>
-<script src="js/gl/world3.js?v=20261005g"></script>
-<script src="js/scene2d/core.js?v=20261005g"></script>
-<script src="js/scene2d/scenes.js?v=20261005g"></script>
-<script src="js/scene2d/scenes2.js?v=20261005g"></script>
-<script src="js/scene2d/scenes3.js?v=20261005g"></script>
-<script src="js/scene2d/pick.js?v=20261005g"></script>
-<script src="js/roll.js?v=20261005g"></script>
-<script src="js/scoresync.js?v=20261005g"></script>
-<script src="js/script.js?v=20261005g"></script>
-<script src="js/main.js?v=20261005g"></script>
+<script src="js/theme.js?v=20261005h"></script>
+<script src="js/score.js?v=20261005h"></script>
+<script src="js/wav.js?v=20261005h"></script>
+<script src="js/synth.js?v=20261005h"></script>
+<script src="js/story.js?v=20261005h"></script>
+<script src="js/factory.js?v=20261005h"></script>
+<script src="js/gl/core.js?v=20261005h"></script>
+<script src="js/gl/lru.js?v=20261005h"></script>
+<script src="js/gl/geom.js?v=20261005h"></script>
+<script src="js/gl/camera.js?v=20261005h"></script>
+<script src="js/gl/world.js?v=20261005h"></script>
+<script src="js/gl/cast.js?v=20261005h"></script>
+<script src="js/gl/render.js?v=20261005h"></script>
+<script src="js/director.js?v=20261005h"></script>
+<script src="js/gl/world2.js?v=20261005h"></script>
+<script src="js/gl/world3.js?v=20261005h"></script>
+<script src="js/scene2d/core.js?v=20261005h"></script>
+<script src="js/scene2d/scenes.js?v=20261005h"></script>
+<script src="js/scene2d/scenes2.js?v=20261005h"></script>
+<script src="js/scene2d/scenes3.js?v=20261005h"></script>
+<script src="js/scene2d/pick.js?v=20261005h"></script>
+<script src="js/roll.js?v=20261005h"></script>
+<script src="js/scoresync.js?v=20261005h"></script>
+<script src="js/script.js?v=20261005h"></script>
+<script src="js/main.js?v=20261005h"></script>
 </body>
 </html>

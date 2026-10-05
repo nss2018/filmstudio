@@ -225,6 +225,8 @@
 - **AI 通道**：填 Base / Key / 模型（DeepSeek / OpenAI / 硅基流动 / Moonshot / 火山方舟豆包 / 自建），走 OpenAI 兼容的 `/chat/completions`。Key 只写进你自己浏览器的 localStorage，不经过本站任何服务器
 - **「模型」那个框是个下拉**：填完 Key（或切到某个服务商）会自动拉一次 `/models`，把这个 Key 已开通的模型、控制台建的接入点（`ep-…`）全列出来，中文备注直接显示（豆包 Seed 2.0 / DeepSeek R1 / 自建接入点…），点一下就填；你现在手上的模型名不会被顶掉，空着才自动选第一个。清单只存本机 7 天，离线也能选
 - 有些服务不给浏览器跨域（CORS），直连会失败——把 `workers/proxy.js` 贴到一个 Cloudflare Worker，Base 填 worker 地址就行（拉模型清单如果也 403，点「拉这个 Key 已开通的模型」会给同样的提示）
+- **报错一定带上游原话 + 下一步**（`script.js` 的 `upstreamMsg` / `denyTip`，纯函数、可测）：401/403 不再只说「检查 Key 和 base」，而是把网关返回的 `error.code` / `error.message` 挖出来，再按服务商给具体指引
+- **方舟 401 就三条**：① Key 要取「API Key 管理」里那串（控制台「密钥管理」的 `AKLT` 密钥是 HMAC 签名的，Bearer 不认，必 401）；② Base 必须是 `https://ark.cn-beijing.volces.com/api/v3`（不是 `/v1`）；③ 模型要这个账号开通过的模型或自建的 `ep-` 推理接入点——方舟按账号授权，模型名写对但没开通照样 401。预设里那个 `doubao-seed-2-0-code-preview-*` 预览模型不一定人人有，切预设时若查到清单里有 `ep-` 接入点会自动换成它；模型框空着时自动选也优先 `ep-`。清单能拉到就重拉一次（一键成片 / AI 导演撞到鉴权错误会自动帮你重拉）
 - 「给个每段拍数建议」会按最长一段的字数算一个不撞帧的拍数
 
 ### 配乐从哪来

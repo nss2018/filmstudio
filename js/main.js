@@ -640,6 +640,10 @@
       })['catch'](function (e) {
         applySB(sb);
         hint($('f3d-status'), '✗ ' + e.message + '（已回落到本地分镜）', 'bad');
+        // 八成是 Key / 模型这两件事。顺手重拉一次清单，用户当场能看到这个 Key 到底能用什么
+        if (/401|403|鉴权|没权限|没开通|无权限/.test(e.message || '')) {
+          try { pullModels(true); } catch (err) {}
+        }
       });
     } else {
       applySB(sb);
@@ -1328,6 +1332,14 @@
     if (!p) return;
     $('sw-base').value = p.base || cfg.base || '';
     $('sw-model').value = p.model || cfg.model || '';
+    // 方舟按账号授权模型：预设里那个预览模型（doubao-seed-2-0-code-preview）不是每个账号都有，
+    // 撞上去就是 401。查到清单就优先用 ep- 推理接入点——那是你自己在控制台建过、必定有权限的。
+    if (p.id === 'ark') {
+      var cached = null;
+      try { cached = FS.script.readModelCache(p.base); } catch (e) {}
+      var ep = (cached || []).filter(function (m) { return m && /^ep-/.test(String(m.id)); });
+      if (ep.length) $('sw-model').value = ep[0].id;
+    }
   }
   $('sw-preset').addEventListener('change', function () { cfg.preset = this.value; applyPreset(this.value); pullModels(true); });
   ['sw-base', 'sw-key', 'sw-model'].forEach(function (id) {
@@ -1373,7 +1385,12 @@
       dl.appendChild(o);
     });
     var inList = !!cur && (list || []).some(function (m) { return m.id === cur; });
-    if (!cur && list && list.length) inp.value = list[0].id;   // 空着 → 直接替他选上，省得手抄
+    if (!cur && list && list.length) {
+      // 空着就替他选。方舟是按账号授权模型的（写错一个字就是 401），
+      // 所以有「推理接入点 ep-」就优先它——那是自己控制台建过、肯定有权限的
+      var ep = (list || []).filter(function (m) { return m && /^ep-/.test(String(m.id)); });
+      inp.value = (ep[0] || list[0]).id;
+    }
     return { n: (list || []).length, cur: cur, inList: inList };
   }
 

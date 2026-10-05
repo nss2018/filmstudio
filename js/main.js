@@ -1238,13 +1238,27 @@
   /* ================== 文案助手（字幕从哪来） ================== */
   var cfg = FS.script.loadCfg() || {};
 
+  /** 直连被 CORS 拦时，script.js 会自动改走本站 ai.php 重试一次；成功后调这个把 UI 同步过来，
+   *  并把设置存下来 —— 免得下次开页又跑回直连、再撞一次同样的墙。 */
+  function healToProxy(host) {
+    if (!cfg) return;
+    cfg.preset = 'local-ark';
+    cfg.base = FS.script.LOCAL_PROXY;
+    cfg.via = host || 'ark.cn-beijing.volces.com';
+    FS.script.saveCfg(cfg);
+    if ($('sw-preset')) $('sw-preset').value = 'local-ark';
+    if ($('sw-base')) $('sw-base').value = FS.script.LOCAL_PROXY;
+    hint($('sw-status'), 'ℹ️ ' + (host || '上游') + ' 不给浏览器直连（CORS），已自动改走本站 ai.php 并重试成功，设置也替你切好了', 'ok');
+  }
+
   function scriptOpts() {
     return {
       topic: $('sw-topic').value,
       example: $('sw-example').value,
       mood: $('sw-mood').value,
       count: $('sw-count').value,
-      bpm: parseInt($('f-bpm').value, 10) || 84
+      bpm: parseInt($('f-bpm').value, 10) || 84,
+      onHeal: healToProxy
     };
   }
 
@@ -1296,7 +1310,8 @@
     var eff = {
       base: $('sw-base').value.trim() || (cfg && cfg.base) || '',
       key: k,
-      model: $('sw-model').value.trim() || (cfg && cfg.model) || ''
+      model: $('sw-model').value.trim() || (cfg && cfg.model) || '',
+      onHeal: healToProxy
     };
     if (!eff.key) {
       var fold = $('api-fold');
@@ -1504,9 +1519,10 @@
     var btn = $('sw-list');
     if (btn) btn.disabled = true;
     if (!quiet) modelTip('正在查…');
-    FS.script.listModels({ base: base, key: k }).then(function (list) {
+    FS.script.listModels({ base: base, key: k, onHeal: healToProxy }).then(function (list) {
       var r = fillModelPicker(list, isArkPreset());
-      FS.script.writeModelCache(base, list);
+      // 存缓存要用「 heals 之后的 base」——自动改走代理时 base 已经变成 ai.php 了
+      FS.script.writeModelCache($('sw-base').value.trim() || base, list);
       var msg = '✓ 这个 Key 可调用 ' + r.n + ' 个模型';
       if (r.replaced) msg += '（已替你改成 ' + $('sw-model').value.trim() + '）';
       else if (r.cur && !r.inList) msg += '（你填的 ' + r.cur + ' 不在里头，注意别写错）';

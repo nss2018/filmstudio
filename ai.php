@@ -10,13 +10,15 @@
  * 它做什么：
  *   1) 浏览器 POST /filmstudio/ai.php  { host, path, payload, key }
  *      → 服务端用 curl 转发到 https://{host}{path}，原样透传响应与状态码
- *   2) GET /filmstudio/ai.php?models=1&key=…
+ *   2) POST /filmstudio/ai.php  {"op":"models","host":…,"key":…}
  *      → 直接列该 Key 已开通的模型，**这才是「填对模型名」的正解**：
  *         不用去控制台抄，也不用赌哪个模型开通了。
+ *   3) POST {"op":"ping"} → 只回 {"ok":true}，前端用它确认「这个文件在、能跑」。
  *
  * 安全：
  *   - 只放行白名单 host（防止这台服务器变成万能开放代理）
- *   - Key 只由浏览器带过来、转发给上游，**不落盘、不写日志**
+ *   - Key 只由浏览器放在**请求体**里、转发给上游，**不落盘、不进 URL、不写访问日志**
+ *     ⚠️ 曾经用 GET ?models=1&key=… 发 Key，nginx access log 里明文可见，已停用。
  *   - 默认限流：单 IP 每分钟 40 次（防被人当免费额度用）
  */
 header('Access-Control-Allow-Origin: *');
@@ -83,10 +85,30 @@ if (count($hits) >= 40) {
 $hits[] = $now;
 @file_put_contents($RL, implode(',', $hits));
 
-/* ---------- 列模型：GET ?models=1&key=…&host=… ---------- */
+/* ---------- 列模型：POST {"op":"models","host":…,"key":…} ----------
+ * ⚠️ 旧写法 `GET ?models=1&key=…` 已停用：Key 会明文进 nginx access log
+ *    （服务器日志实测能看到 key=…），必须走请求体。 */
 if (isset($_GET['models'])) {
-  $key  = trim((string)($_GET['key'] ?? ''));
-  $host = trim((string)($_GET['host'] ?? 'ark.cn-beijing.volces.com'));
+  fail(400, '列模型请改用 POST（请求体 {"op":"models","host":…,"key":…}）。'
+    . '旧的 ?models=1&key=… 写法会把 Key 明文记进服务器访问日志，已停用。');
+}
+
+/* ---------- 读请求体（转发与列模型共用） ---------- */
+$in = null;
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
+  $in = json_decode(file_get_contents('php://input'), true);
+  if (!is_array($in)) fail(400, '请求体不是 JSON');
+}
+
+/* ---------- 探活：只证明「这个文件在、PHP 能跑」，不碰任何上游 ---------- */
+if (is_array($in) && (string)($in['op'] ?? '') === 'ping') {
+  out_json(200, ['ok' => true, 'file' => 'ai.php', 'allow' => $ALLOW]);
+}
+
+/* ---------- 列模型 ---------- */
+if (is_array($in) && (string)($in['op'] ?? '') === 'models') {
+  $key  = trim((string)($in['key'] ?? ''));
+  $host = trim((string)($in['host'] ?? 'ark.cn-beijing.volces.com'));
   if (!in_array($host, $ALLOW, true)) fail(403, "host 不在白名单里：$host");
   if ($key === '') fail(400, '没填 Key');
   $ch = curl_init(upstream_url($host, '/models', $PREFIX));
@@ -109,10 +131,7 @@ if (isset($_GET['models'])) {
 }
 
 /* ---------- 转发：POST ---------- */
-if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') fail(405, '只接受 POST 或 ?models=1');
-
-$in = json_decode(file_get_contents('php://input'), true);
-if (!is_array($in)) fail(400, '请求体不是 JSON');
+if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') fail(405, '只接受 POST（列模型用 {"op":"models"}）');
 
 $host   = trim((string)($in['host'] ?? ''));
 $path   = (string)($in['path'] ?? '/chat/completions');

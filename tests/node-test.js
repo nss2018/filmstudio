@@ -1455,6 +1455,62 @@ const listMsg = function (cfg) {
     ok('ai.php 列模型也走 upstream_url（不写死一家）', /upstream_url\(\$host,\s*'\/models'/.test(php));
   })();
 
+  // ⑥ 本站代理的地址必须能算对 —— 真实事故：2026-10-05 手机端「ai.php 根本不能代理」。
+  //    服务器 access log 实锤：浏览器请求的是 /filmstudio/js/ai.php（多一层 js/）→ nginx
+  //    "Primary script unknown" → 404。根因是 proxyUrl() 在**运行期**问 document.currentScript，
+  //    而部分手机 WebView（实测 OPPO HeyTapBrowser/Chromium 115）运行期仍返回最后执行的脚本，
+  //    目录被算成 .../filmstudio/js/。桌面 Chrome 上 currentScript 真的是 null，所以本地永远测不出来。
+  (function () {
+    const savedDoc = global.document;
+    const savedScript = FS.script;
+    try {
+      // ① 加载期：currentScript 指向 /filmstudio/js/script.js（真实部署形态）
+      global.document = {
+        currentScript: { src: 'https://api.yuansutansuo.ltd/filmstudio/js/script.js?v=20261005n' },
+        getElementsByTagName: () => []
+      };
+      const p = require.resolve(path.join(__dirname, '..', 'js', 'script.js'));
+      delete require.cache[p];
+      require(p);
+      const loaded = FS.script;
+
+      ok('加载期就把代理地址定成站点根（去掉 js/）',
+        loaded.proxyUrl() === 'https://api.yuansutansuo.ltd/filmstudio/ai.php',
+        '(' + loaded.proxyUrl() + ')');
+
+      // ② 关键：运行期 currentScript 变回 null（桌面）或仍返回脚本（手机 WebView）都不能影响它
+      global.document.currentScript = null;
+      ok('运行期 currentScript=null，地址照样对',
+        loaded.proxyUrl() === 'https://api.yuansutansuo.ltd/filmstudio/ai.php');
+      global.document.currentScript = { src: 'https://api.yuansutansuo.ltd/filmstudio/js/story.js' };
+      ok('运行期 currentScript 又返回脚本（手机 WebView 的怪癖），地址仍不变',
+        loaded.proxyUrl() === 'https://api.yuansutansuo.ltd/filmstudio/ai.php',
+        '(' + loaded.proxyUrl() + ')');
+
+      // ③ 源码级守卫：proxyUrl 里不许再问 document.currentScript
+      const src = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'script.js'), 'utf8');
+      const fnBody = /function proxyUrl\(\)\s*\{[\s\S]*?\n  \}/.exec(src);
+      ok('proxyUrl() 不再碰 document.currentScript（改用加载期定下的 SELF_DIR）',
+        !!fnBody && !/currentScript/.test(fnBody[0]) && /SELF_DIR/.test(fnBody[0]));
+
+      // ④ Key 绝不能进 URL（会明文落进 nginx access log —— 真实日志里已看到过）
+      ok('客户端不再用 ?models=1&key=…（Key 会进访问日志）', !/\?models=1&host=/.test(src));
+      ok('列模型改走 POST 请求体', /op:\s*'models'/.test(src) && /body:\s*JSON\.stringify\(\{\s*op:\s*'models'/.test(src));
+      const php = require('fs').readFileSync(path.join(__dirname, '..', 'ai.php'), 'utf8');
+      ok('ai.php 停用 GET ?models=1（Key 会进访问日志）', /isset\(\$_GET\['models'\]\)[\s\S]{0,200}fail\(400/.test(php));
+      ok('ai.php 支持 op=ping 探活（前端靠它判断代理在不在）', /'op'\]\s*\)?\s*===\s*'ping'/.test(php) || /===\s*'ping'/.test(php));
+
+      // ⑤ 直连被 CORS 拦时要自动改走代理重试（桌面端那条报错的根治办法）
+      ok('直连 CORS 失败会自动改走本站代理重试', /proxyPing\(\)/.test(src) && /listModels\(\{\s*base:\s*LOCAL_PROXY/.test(src) && /callApi\(t,\s*promptStr,\s*parseFn\)/.test(src));
+    } finally {
+      if (savedDoc === undefined) delete global.document; else global.document = savedDoc;
+      const p = require.resolve(path.join(__dirname, '..', 'js', 'script.js'));
+      delete require.cache[p];
+      require(p);
+      if (!savedScript) FS.script = savedScript;
+    }
+  })();
+
   section('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败');
     process.exit(fail ? 1 : 0);
   })

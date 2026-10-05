@@ -11,6 +11,30 @@
   'use strict';
   var FS = (root.FS = root.FS || {});
 
+  /* ⚠️ 本站自己的地址必须在**脚本加载期**定下来，不能等到运行期再问 document.currentScript。
+   * 规范上 currentScript 只在脚本同步求值期间有值、之后是 null；但部分手机 WebView
+   * （实测 OPPO HeyTapBrowser / Chromium 115）在运行期仍返回「最后执行的那个脚本」，
+   * 于是目录被算成 /filmstudio/js/ → 请求 /filmstudio/js/ai.php → nginx 404
+   * （服务器日志实测：Primary script unknown）。
+   * 这个坑在桌面 Chrome 上**复现不出来**（那里 currentScript 真的是 null，走的是相对路径）。
+   * 所以：加载期抓一次 src，存成绝对目录，之后一律用它。 */
+  var SELF_DIR = (function () {
+    try {
+      var s = (document.currentScript && document.currentScript.src) || '';
+      if (!s) {
+        // 兜底：脚本标签此刻已在 DOM 里（它正在执行），按 src 找自己
+        var tags = document.getElementsByTagName('script') || [];
+        for (var i = 0; i < tags.length; i++) {
+          if (/(^|\/)script\.js(\?|$)/.test(tags[i].src || '')) { s = tags[i].src; break; }
+        }
+      }
+      if (!s) return '';
+      var d = s.replace(/[^/]*$/, '');        // .../filmstudio/js/
+      if (/(^|\/)js\/$/.test(d)) d = d.slice(0, -3);   // 去掉 js/ → .../filmstudio/
+      return d;
+    } catch (e) { return ''; }               // 没有 document（node 测试）就退回相对路径
+  })();
+
   var MOODS = ['科普', '热血', '俏皮', '诗性'];
   var MOOD_KEY = { '科普': 'sci', '热血': 'hot', '俏皮': 'fun', '诗性': 'poem' };
 
@@ -226,12 +250,27 @@
   function isProxyBase(base) {
     return /\b(?:^|\/)ai\.php$/.test(String(base || '').trim());
   }
-  /** 本地代理基准地址（页面可能部署在子目录，用脚本自身的 src 反推，绝不会错） */
+  /** 本地代理的绝对地址。加载期算一次（见 SELF_DIR），运行期不再碰 document.currentScript ——
+   *  踩过的坑：运行期问 currentScript，在部分手机浏览器上会拿到最后执行的脚本，
+   *  目录被算成 .../js/ → 请求 .../js/ai.php → 404。 */
   function proxyUrl() {
-    var s = (document.currentScript && document.currentScript.src) ||
-      (root.document && root.document.currentScript && root.document.currentScript.src) || '';
-    if (s) { var m = s.replace(/[^/]*$/, ''); if (m) return m + LOCAL_PROXY; }
-    return LOCAL_PROXY;
+    return SELF_DIR ? SELF_DIR + LOCAL_PROXY : LOCAL_PROXY;
+  }
+  /** Base 里的主机名（自动改走代理时要知道往哪转发） */
+  function hostOf(base) {
+    var m = /^[a-z][a-z0-9+.-]*:\/\/([^/:?#]+)/i.exec(String(base || '').trim());
+    return m ? m[1] : '';
+  }
+  /** 本站 ai.php 在不在？探一次就记住（POST {"op":"ping"}，有任何 HTTP 响应都说明文件在） */
+  var _ping = null;
+  function proxyPing() {
+    if (_ping) return _ping;
+    _ping = fetch(proxyUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op: 'ping' })
+    }).then(function () { return true; }, function () { return false; });
+    return _ping;
   }
   function proxyOrigin(via) {
     return String(via || 'ark.cn-beijing.volces.com')
@@ -385,7 +424,8 @@
     if (isProxyBase(rawBase)) {
       var ctrl0 = (root.AbortController ? new root.AbortController() : null);
       var timer0 = setTimeout(function () { if (ctrl0) ctrl0.abort(); }, 90000);
-      return fetch(proxyUrl(), {
+      var purl0 = proxyUrl();
+      return fetch(purl0, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -403,7 +443,13 @@
         return res.text().then(function (txt) {
           clearTimeout(timer0);
           var upBase = 'https://' + proxyOrigin(cfg.via) + '/api/v3';
-          if (res.status >= 400) throw new Error(upstreamMsg(res.status, txt, upBase, cfg.model));
+          if (res.status >= 400) {
+            if (!/^\s*[\[{]/.test(txt))   // nginx 的 404/502 是 HTML，不是 JSON
+              throw new Error('本站代理返回 ' + res.status + '（不是 JSON）。请求打到了：' + purl0 +
+                '（' + (root.location ? root.location.host : '?') + '）——地址里多一层 /js/ 就是' +
+                '浏览器缓存了老版本 js/script.js，强制刷新即可');
+            throw new Error(upstreamMsg(res.status, txt, upBase, cfg.model));
+          }
           var j = null;
           try { j = JSON.parse(txt); } catch (err) { /* 下面 extractContent 再兜一次 */ }
           if (j && j.error) throw new Error((j.error.message || j.error.code || '上游报错'));
@@ -413,8 +459,8 @@
         clearTimeout(timer0);
         var m = err && err.message ? err.message : String(err);
         if (/Failed to fetch|NetworkError|Load failed|aborted/i.test(m))
-          throw new Error('连不上本站的 ai.php 代理——它跟站点一起部署在 /filmstudio/ai.php，' +
-            '先确认这个文件在（浏览器直接打开 https://' + (root.location ? root.location.host : '') + '/filmstudio/ai.php?models=1 看看返不返 JSON）');
+          throw new Error('连不上本站代理（打的是 ' + purl0 + '）：' + m +
+            '　它跟站点同目录部署，服务器上要真有这个文件');
         throw err;
       });
     }
@@ -445,8 +491,20 @@
       });
     })['catch'](function (err) {
       var msg = err && err.message ? err.message : String(err);
-      if (/Failed to fetch|NetworkError|CORS|Load failed|aborted/i.test(msg))
-        throw new Error('直连被浏览器拦了（CORS）或超时。两个办法：① 换支持跨域的服务；② 用仓库里的 workers/proxy.js 挂个 Cloudflare Worker 当自动代理。');
+      if (/Failed to fetch|NetworkError|CORS|Load failed|aborted/i.test(msg)) {
+        // 直连被 CORS 拦（火山方舟必中）→ 自动改走本站 ai.php 重试一次，别让用户手动改设置
+        var h = hostOf(base);
+        if (!h) throw new Error('直连被浏览器拦了（CORS）或超时，且 Base 里看不出主机名，无法自动改走本站代理。');
+        return proxyPing().then(function (ok) {
+          if (!ok)
+            throw new Error('直连被 CORS 拦了，本站代理（' + proxyUrl() + '）也连不上——两都不通，先检查网络。');
+          var t = { base: LOCAL_PROXY, key: key, model: cfg.model, via: h, onHeal: cfg.onHeal };
+          return callApi(t, promptStr, parseFn).then(function (r) {
+            if (typeof cfg.onHeal === 'function') cfg.onHeal(h);
+            return r;
+          });
+        });
+      }
       throw err;
     })['finally'](function () { clearTimeout(timer); });
   }
@@ -526,19 +584,34 @@
     var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 30000);
     function fin() { clearTimeout(timer); }
     // ★ 代理模式：列模型也走服务器（这是拿到「你这个 Key 到底能调什么」的唯一可靠办法）
+    // ⚠️ 必须 POST：旧写法 GET ?models=1&key=… 会把 Key 明文记进 nginx access log
+    //    （服务器日志实测能看到 key=…），已改成请求体。
     if (isProxyBase(rawBase)) {
       var upB = 'https://' + proxyOrigin(cfg.via) + '/api/v3';
-      return fetch(proxyUrl() + '?models=1&host=' + encodeURIComponent(proxyOrigin(cfg.via)) +
-        '&key=' + encodeURIComponent(key), { signal: ctrl ? ctrl.signal : undefined })
+      var purl = proxyUrl();
+      return fetch(purl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op: 'models', host: proxyOrigin(cfg.via), key: key }),
+        signal: ctrl ? ctrl.signal : undefined
+      })
         .then(function (res) {
           return res.text().then(function (txt) {
-            if (res.status >= 400) throw new Error(upstreamMsg(res.status, txt, upB, '', '/models'));
+            if (res.status >= 400) {
+              // 服务器上没这个文件 / 网关错误时，nginx 回的是 HTML 不是 JSON，
+              // 光看状态码猜不出是「路径算错」还是「Key 不对」——把真实地址也带出来。
+              if (!/^\s*[\[{]/.test(txt))
+                throw new Error('本站代理返回 ' + res.status + '（不是 JSON）。请求打到了：' + purl +
+                  '（' + (root.location ? root.location.host : '?') + '）——如果地址里多了一层 /js/，' +
+                  '说明浏览器缓存了老版本的 js/script.js，强制刷新一下就好');
+              throw new Error(upstreamMsg(res.status, txt, upB, '', '/models'));
+            }
             return parseModelList(txt);
           });
         })['catch'](function (err) {
           var m = err && err.message ? err.message : String(err);
           if (/Failed to fetch|NetworkError|Load failed|aborted/i.test(m))
-            throw new Error('连不上本站的 ai.php 代理，确认 /filmstudio/ai.php 这个文件在服务器上');
+            throw new Error('连不上本站代理（打的是 ' + purl + '）：' + m);
           throw err;
         })['finally'](fin);
     }
@@ -552,9 +625,21 @@
       return res.text().then(parseModelList);
     })['catch'](function (err) {
       var msg = err && err.message ? err.message : String(err);
-      if (/Failed to fetch|NetworkError|CORS|Load failed|aborted/i.test(msg))
-        throw new Error('直连被浏览器拦了（CORS）或超时——这个服务不给跨域列模型。' +
-          '最简单的解法：把服务商选成「火山方舟 豆包（走本站代理 · 推荐）」，Base 会变成 ai.php，由服务器转发。');
+      if (/Failed to fetch|NetworkError|CORS|Load failed|aborted/i.test(msg)) {
+        // 直连被浏览器按 CORS 拦掉（方舟必中，别的家也常中）。
+        // 与其丢一句"你自己改设置"给用户，不如自己换条路：改走本站 ai.php 重试一次。
+        var h = hostOf(base);
+        if (!h) throw new Error('直连被浏览器拦了（CORS）或超时，而且 Base 里看不出主机名，没法自动改走本站代理。');
+        return proxyPing().then(function (ok) {
+          if (!ok)
+            throw new Error('直连被 CORS 拦了，本站代理（' + proxyUrl() + '）也连不上——两都不通，先检查网络。');
+          return listModels({ base: LOCAL_PROXY, key: key, via: h, onHeal: cfg.onHeal })
+            .then(function (list) {
+              if (typeof cfg.onHeal === 'function') cfg.onHeal(h);
+              return list;
+            });
+        });
+      }
       throw err;
     })['finally'](fin);
   }
@@ -625,7 +710,7 @@
     normalizeBase: normalizeBase,
     advice: advice, PRESETS: PRESETS, MOODS: MOODS,
     isProxyBase: isProxyBase, proxyUrl: proxyUrl, proxyOrigin: proxyOrigin, LOCAL_PROXY: LOCAL_PROXY,
-    DEFAULT_ARK_MODEL: DEFAULT_ARK_MODEL,
+    hostOf: hostOf, proxyPing: proxyPing, SELF_DIR: SELF_DIR, DEFAULT_ARK_MODEL: DEFAULT_ARK_MODEL,
     loadCfg: loadCfg, saveCfg: saveCfg,
     // 给测试用
     _rng: rng, _fnv: fnv

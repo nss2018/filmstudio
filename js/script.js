@@ -305,22 +305,149 @@
     ].filter(Boolean).join('\n');
   }
 
-  /** 容错解析模型输出：抠掉 ```json 围栏、affe 前缀后缀、直接找第一个 { 到最后一个 } */
+  /* ================================================================
+   *  JSON 容错（2026-10-05）
+   *
+   *  用户的原话截图：「✗ Expected ',' or '}' after property value in JSON at
+   *  position 331（没动你已经填的内容，改好再试一次）」—— 这条提示有两个问题：
+   *    ① 把责任推给用户（「你填错了」），但**他什么都没填错**，是模型吐了坏 JSON；
+   *    ② 抛的是 V8 的原始英文报错，position 331 没有任何可操作性。
+   *
+   *  模型吐坏 JSON 是**常态**：尾逗号、单引号、裸键名、值里有真换行、全角引号。
+   *
+   *  ⚠️ 关键教训：第一版用**一串正则**去修，结果只修好了键、没修好单引号的**值**
+   *  （`{"title":'对称'}` 还是非法）。原因是正则分不清「引号里的内容」和「结构符号」，
+   *  一旦某一步改动了引号数量，后面的正则就全错位了。
+   *  → 正解是**一次线性扫描**：逐字符判断自己在字符串内还是结构区，只在结构区动手。
+   *     这样每一步的判断依据是「我此刻在不在字符串里」，而不是「第几次替换」。
+   * ================================================================ */
+
+  /** 修常见的坏 JSON。修不动返回 null。 */
+  function repairJson(input) {
+    if (typeof input !== 'string' || !input) return null;
+    var s = input;
+    // ① 全角引号/冒号先归一（这个是纯字符替换，放在扫描前做最安全）
+    s = s.replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/：/g, ':');
+
+    var out = '';
+    var i = 0, n = s.length;
+    var lastMeaning = '';        // 上一个「有意义」的字符，用来判尾逗号
+    while (i < n) {
+      var ch = s[i];
+
+      // ---- 字符串区：原样搬，但把真换行/制表符换成空格（JSON 不允许裸控制字符）
+      if (ch === '"' || ch === "'") {
+        var quote = ch;
+        out += '"';
+        i++;
+        while (i < n) {
+          var c2 = s[i];
+          if (c2 === '\\') {                       // 转义：两个字符一起搬
+            out += c2 + (s[i + 1] || '');
+            i += 2;
+            continue;
+          }
+          if (c2 === quote) { out += '"'; i++; break; }
+          // ⚠️ 单引号串里出现双引号，**必须转义**而不是照搬。
+          //    照搬会产出 {"title":"他说"好""} 这种比原文更糟的东西
+          //    （第一版就是这里错的：它把 " 直接输出，于是 JSON 反而更坏）。
+          if (c2 === '"') { out += '\\"'; i++; continue; }
+          if (c2 === '\n' || c2 === '\r' || c2 === '\t') { out += ' '; i++; continue; }
+          out += c2;
+          i++;
+        }
+        lastMeaning = '"';
+        continue;
+      }
+
+      // ---- 裸键名：紧跟 { 或 , 的标识符，且后面是冒号 → 补引号
+      if (/[A-Za-z_$]/.test(ch)) {
+        var j = i;
+        while (j < n && /[A-Za-z0-9_$]/.test(s[j])) j++;
+        var word = s.slice(i, j);
+        var k = j;
+        while (k < n && /\s/.test(s[k])) k++;
+        if ((lastMeaning === '{' || lastMeaning === ',') && s[k] === ':') {
+          out += '"' + word + '"';
+          lastMeaning = 'w';
+          i = j;
+          continue;
+        }
+        out += word;
+        lastMeaning = 'w';
+        i = j;
+        continue;
+      }
+
+      // ---- 尾逗号：{ "a":1 , } → 下一个非空白字符是 } 或 ] 就跳过这个逗号
+      if (ch === ',') {
+        var m = i + 1;
+        while (m < n && /\s/.test(s[m])) m++;
+        if (s[m] === '}' || s[m] === ']') { i = m; continue; }   // 丢逗号
+        out += ',';
+        lastMeaning = ',';
+        i++;
+        continue;
+      }
+
+      // ---- 结构符号与数字/true/false/null：照搬
+      if (ch === '{' || ch === '[') { out += ch; lastMeaning = ch; i++; continue; }
+      if (ch === '}' || ch === ']') { out += ch; lastMeaning = ch; i++; continue; }
+      if (ch === ':') { out += ':'; lastMeaning = ':'; i++; continue; }
+      if (/\s/.test(ch)) { i++; continue; }              // 空白不记
+      out += ch; lastMeaning = 'v'; i++;
+    }
+    try { JSON.parse(out); return out; } catch (e) { return null; }
+  }
+
+  /** 容错解析模型输出：抠围栏 → 找 JSON 段 → 修 → 解析 */
   function parse(text) {
     if (typeof text !== 'string') throw new Error('模型返回的不是文本');
     var s = text.trim();
     s = s.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
     var a = s.indexOf('{'), b = s.lastIndexOf('}');
-    if (a < 0 || b <= a) throw new Error('模型没输出 JSON（前 80 字：' + s.slice(0, 80) + '）');
+    if (a < 0 || b <= a) {
+      throw new Error('模型这次没按要求输出 JSON（可能直接写了散文）。' +
+        '把「风格」选成具体一点、或点「拉这个 Key 已开通的模型」换个模型再试。' +
+        '它返回的开头是：「' + s.slice(0, 60) + '」');
+    }
     s = s.slice(a, b + 1);
-    var obj = JSON.parse(s);
+    var obj = null, repaired = false;
+    try {
+      obj = JSON.parse(s);
+    } catch (e) {
+      // ★ 这里以前直接把 V8 的英文报错原样抛出去（用户截图看到的那句）
+      var fixed = repairJson(s);
+      if (fixed) {
+        try { obj = JSON.parse(fixed); repaired = true; }
+        catch (e2) { obj = null; }
+      }
+      if (!obj) {
+        // 报人话：位置换算成「第几个字段附近」，并给出可操作的下一步
+        var pos = /position (\d+)/.exec(String(e && e.message)) ;
+        var at = pos ? parseInt(pos[1], 10) : -1;
+        var near = at >= 0 ? s.slice(Math.max(0, at - 30), at + 30) : '';
+        throw new Error('模型返回的 JSON 格式坏了（不是你的问题）。' +
+          (at >= 0 ? ('坏在第 ' + at + ' 个字符附近：「' + near.replace(/\s+/g, ' ') + '」') : '') +
+          '点「重试」让它再写一次；或者点「按片名现生成文案」用本地模板，不联网。');
+      }
+    }
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('JSON 顶层不是对象');
-    if (!Array.isArray(obj.scenes) || !obj.scenes.length) throw new Error('JSON 里 scenes 不像个数组');
+    if (!Array.isArray(obj.scenes) || !obj.scenes.length) {
+      // 有时模型把 scenes 写成 narration 之类的别名，或者干脆是个字符串数组
+      var alt = obj.scenes || obj.segments || obj.list || obj.items;
+      if (alt && !Array.isArray(alt)) alt = [alt];
+      if (Array.isArray(alt) && alt.length) obj.scenes = alt;
+      else throw new Error('JSON 里没有 scenes 数组（模型可能没按格式来）。点「重试」再试一次。');
+    }
     obj.scenes = obj.scenes.map(function (x) {
-      return { title: String((x && x.title) || '').slice(0, 24), text: String((x && x.text) || '').slice(0, 60) };
+      if (typeof x === 'string') return { title: '', text: x };
+      return { title: String((x && x.title) || (x && x.t) || '').slice(0, 24),
+               text: String((x && x.text) || (x && x.content) || '').slice(0, 60) };
     }).filter(function (x) { return x.title || x.text; });
-    if (!obj.scenes.length) throw new Error('scenes 里没有有效段落');
+    if (!obj.scenes.length) throw new Error('模型给的 scenes 里没有一句能用的话，点「重试」再试一次。');
     obj.title = String(obj.title || '未命名').slice(0, 30);
+    if (repaired) obj._repaired = true;      // 供 UI 提示「这次是修好的」
     return obj;
   }
 
@@ -703,7 +830,7 @@
   }
 
   FS.script = {
-    local: local, llm: llm, generate: generate, parse: parse, PROMPT: PROMPT,
+    local: local, llm: llm, generate: generate, parse: parse, repairJson: repairJson, PROMPT: PROMPT,
     callApi: callApi, extractContent: extractContent,
     upstreamMsg: upstreamMsg, denyTip: denyTip, denyWord: denyWord,
     listModels: listModels, parseModelList: parseModelList,

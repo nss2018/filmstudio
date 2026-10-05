@@ -78,7 +78,13 @@
     (story.scenes || []).forEach(function (s, i) {
       var m = tl.marks[i];
       if (!m) return;
-      var text = String((s && s.text) || '').trim();
+      // ⚠️⚠️ 2026-10-05 修「没有背景音乐」：以前**只读 s.text**，
+      //   于是「每段填了小标题、字幕框空着」这种极常见的情况 anchors=0
+      //   → use=false → 报「这部片子没有文案」→ **整部片子一点声音都没有**。
+      //   （用户截图就是这样：片名与 4 段标题都填了，字幕框是空的。
+      //   而且这不是「用户没填内容」——他明明填了，标题就是内容。
+      //   正解：text 为空就退回用 title；两者都空才真的算这一段没内容。）
+      var text = String((s && s.text) || '').trim() || String((s && s.title) || '').trim();
       if (!text) return;
       var phrases = splitPhrases(text);
       if (!phrases.length) return;                 // 纯标点不配落点
@@ -189,9 +195,27 @@
   function syncReport(raw, story) {
     var anchors = copyAnchors(story);
     var rep = { anchors: anchors, ratio: 0, cov: 0, use: false, reason: '' };
+    var tl0 = FS.story.timeline(story);
     if (!anchors.length) {
-      rep.reason = '这部片子没有文案（没字幕可跟），配乐无处对齐';
-      return rep;
+      // ⚠️⚠️ 2026-10-05：真的一句文案都没有时，**以前直接 use=false**，
+      //   等于「用户什么都没填 → 导出个哑片」。但那不是唯一合理选择 ——
+      //   没有字幕可跟，仍然可以按 BPM 与每段拍数**按拍对齐**放一首曲子。
+      //   判据仍然是「声音够不够满」，只是落点从「字幕断句」换成「每段起点」。
+      //   只有连时间轴都算不出来（总长 0）才真的没救。
+      if (tl0 && tl0.total > 0.5) {
+        (story.scenes || []).forEach(function (s, i) {
+          var m = tl0.marks[i];
+          if (!m) return;
+          // 每段的中点当落点：一段一段往前推，听感上跟着画面走
+          anchors.push({ t: m.start + m.dur * 0.5, i: i, phrase: String((s && (s.text || s.title)) || '').slice(0, 12) || '第' + (i + 1) + '段' });
+        });
+        anchors.sort(byT);
+        rep.anchors = anchors;
+        rep.fallbackBeats = true;                 // 供 UI 说明「按拍对齐」而不是「按字幕」
+      } else {
+        rep.reason = '这部片子太短了（不足半秒），配乐无处落';
+        return rep;
+      }
     }
     var times = collectTimes(raw);
     if (!times.length) {

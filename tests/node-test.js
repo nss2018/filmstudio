@@ -1121,9 +1121,38 @@ section('14. 配乐跟文案走（字幕断句 / 不合拍静音）');
     const r = S.syncReport({ bpm: 84, duration: 1.0, tracks: hit.tracks }, f2);
     return r.use === false && /压不住/.test(r.reason);
   })());
-  ok('没有文案 = 无处对齐，不配乐', (() => {
-    const r = S.syncReport(hit, { title: 'x', bpm: 84, beats: 8, scenes: [{ text: '' }, { text: '' }] });
-    return r.use === false && /没有文案/.test(r.reason);
+  // ⚠️ 2026-10-05 改判：以前「没有文案 → use=false → 整部片子一点声音都没有」，
+  //   用户原话「没有背景音乐」。但「没填字幕」不等于「不要配乐」——
+  //   没有字幕可跟时按**每段中点**对齐照样能出声音。
+  // ⚠️ 用例必须自带一首**够长**的谱：hit 只有 4s，片子 11.4s，会先被
+  //   「配乐太短压不住」那条规则拦掉 —— 那是另一条规则，跟本次改动无关。
+  const longHit = {
+    bpm: 84,
+    tracks: [{ notes: Array.from({ length: 24 }, (_, k) => ({ p: 'C4', t: k, d: 0.9 })) }]
+  };
+  ok('没有字幕 = 按每段中点兜底对齐，仍然配乐（不再直接哑掉）', (() => {
+    const r = S.syncReport(longHit, { title: 'x', bpm: 84, beats: 8, scenes: [{ text: '' }, { text: '' }] });
+    return r.use === true && r.fallbackBeats === true && r.anchors.length === 2;
+  })());
+  ok('兜底落点真的落在每段中点上（不是随便取个时刻）', (() => {
+    const st = { title: 'x', bpm: 84, beats: 8, scenes: [{ text: '' }, { text: '' }, { text: '' }] };
+    const r = S.syncReport(longHit, st);
+    const tl = FS.story.timeline(st);
+    return r.anchors.length === 3 && r.anchors.every((a, i) =>
+      Math.abs(a.t - (tl.marks[i].start + tl.marks[i].dur * 0.5)) < 0.01);
+  })());
+  ok('只填了标题、字幕框空着 → 也要有配乐（这是用户实际遇到的情况）', (() => {
+    const st = {
+      title: '对称', bpm: 84, beats: 8,
+      scenes: [{ title: '对称，是最早被看见的数学', text: '' },
+               { title: '对称，是最早被看见的数学', text: '' }]
+    };
+    const r = S.syncReport(longHit, st);
+    return r.use === true && r.anchors.length > 0 && !r.fallbackBeats;
+  })(), '(标题就是内容，不该判成「没有文案」)');
+  ok('时间轴短到不足半秒 = 真的没救（那时才不给配乐）', (() => {
+    const r = S.syncReport(longHit, { title: 'x', bpm: 600, beats: 2, scenes: [{ text: '' }] });
+    return r.use === false && /太短/.test(r.reason);
   })());
   ok('一个音都没有 = 不配乐', (() => {
     const r = S.syncReport({ bpm: 84, duration: 999, tracks: [] }, f2);
@@ -2008,14 +2037,32 @@ const listMsg = function (cfg) {
     const msrc2 = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8');
     ok('index.html 加载了 aiscene.js', /js\/aiscene\.js\?v=/.test(mhtml2));
     ok('UI 有「让 AI 画这段」与「清除 AI 场景」', /id="f-ai-paint"/.test(mhtml2) && /id="f-ai-clear"/.test(mhtml2));
-    ok('AI 画场景那行只在 2D 生活场景母题下出现',
-      /aiRow\.hidden = !isDaily/.test(msrc2));
-    ok('AI 场景盖在自动选景之上（改文案不会被弹回手写场景）',
-      /film\.aiScenes/.test(msrc2) && /film\.scenes2d\[i\] = film\.aiScenes\[k\]/.test(msrc2));
+    ok('场景面板只在 2D 生活场景母题下出现',
+      /panel\.hidden = !isDaily/.test(msrc2) && /id="f-scene-panel"/.test(mhtml2));
+    // 用户原话「上面也有下面也有，这有什么关系」+「你说几种，有p用」：
+    // 母题下拉不再报「18 种」（那是内部实现细节），场景显示只留「每段一个卡片」一处。
+    ok('母题下拉不再写「18 种」（用户：说几种有p用）',
+      !/18 种/.test(mhtml2) && /value="daily">生活场景（2D 插画）/.test(mhtml2));
+    ok('每段一个场景卡片（一次看全各段，不再只显示当前段）',
+      /id="f-scene-strip"/.test(mhtml2) && /function drawSceneStrip/.test(msrc2));
+    ok('没有多余的重复提示行（同一场景名不再显示两遍）', !/id="f-scene-tip"/.test(mhtml2));
+    ok('「让 AI 画这段」用当前选中段，不再另设一个「选一段…」下拉',
+      /var idx = s2dCur;/.test(msrc2) && !/id="f-ai-scene"/.test(mhtml2));
+    ok('AI 场景在下拉里以 ★ 标出且排在最前', /sceneIsAi\(k\) \? '★ '/.test(msrc2));
+    // 这条曾是 bug：改一次场景把**所有段**都设成同一个（截图里 4 段全变 AI 场景）
+    ok('改场景只影响当前那一段（不再全片统一）',
+      /film\.scenes2d\[s2dCur\] = v;/.test(msrc2) &&
+      !/film\.scenes2d = film\.scenes\.map\(function \(\) \{ return manual; \}\)/.test(msrc2));
+    ok('applyScenes 不再整份重算（保住手动指定与 AI 场景）',
+      /if \(!film\.scenes2d \|\| film\.scenes2d\.length !== film\.scenes\.length\)/.test(msrc2));
+    ok('aiClear 逐段退回而不是整份置 null', !/film\.scenes2d = null;[\s\S]{0,200}applyScenes/.test(msrc2));
+    ok('AI 场景记在 film.aiScenes 里，且手动改场景会把它摘掉',
+      /film\.aiScenes\[idx\] = id/.test(msrc2) &&
+      /if \(film\.aiScenes\) delete film\.aiScenes\[s2dCur\]/.test(msrc2));
     ok('AI 失败时保留手写场景，绝不开天窗', (() => {
       // catch 分支里必须 unregister + 保留原 scenes2d（不是把这一段置空）
-      const c = msrc2.match(/\['catch'\]\(function \(e\) \{[\s\S]{0,500}?\}\)\['finally'\]/);
-      return c && /aiscene\.unregister/.test(c[0]) && /已保留原来的手写场景/.test(c[0]);
+      const c = msrc2.match(/\['catch'\]\(function \(e\) \{[\s\S]{0,600}?\}\)\['finally'\]/);
+      return c && /aiscene\.unregister/.test(c[0]) && /退回手写场景/.test(c[0]);
     })());
     ok('没填 Key 时直说人话而不是发一个必然失败的请求',
       /还没填 API Key/.test(msrc2));

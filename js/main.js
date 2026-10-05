@@ -739,6 +739,38 @@
   }
 
   /* ---------------- 2D 生活场景：选景 ---------------- */
+  /* ------------------------------------------------------------------
+   *  场景选择：2026-10-05 重做
+   *
+   *  用户截图里的原话：「上面也有下面也有，这有什么关系」+「你说几种，有p用」。
+   *  现场是：母题下拉写着「生活场景（2D 插画 · 18 种）」，它下面又有个场景下拉
+   *  显示着同一个场景名（「已手动指定 · AI·对称…」），再下面还有一整串
+   *  「AI·对称… → AI·对称… → AI·对称… → AI·对称…」。三处都在说同一件事。
+   *
+   *  重做成三件事，各管一件、不再互相重复：
+   *    ① 母题下拉只说「画法」（生活场景（2D 插画））—— 不再报「18 种」，
+   *       那是内部实现细节，用户不需要知道，更不该由他来决定。
+   *    ② **每段一个小卡片**（#f-scene-strip），一眼看全 4 段各是什么场景。
+   *       点卡片即选中那段，右侧下拉只改这一段。
+   *    ③ 场景下拉只服务「当前选中的一段」，不再一改就 4 段全变
+   *       （这正是截图里 4 段变成同一个 AI 场景的原因）。
+   * ---------------------------------------------------------------- */
+
+  /** 场景面板里当前选中的是第几段（点卡片切换）。
+   *  ⚠️ 场景是**逐段**的 —— 母题才是全片统一。所以「当前段」这个状态必须有，
+   *     否则「让 AI 画这段」「改这段的场景」都不知道说的是哪一段。 */
+  var s2dCur = 0;
+
+  /** 场景名（AI 场景带标记） */
+  function sceneName(id) {
+    var m = FS.s2dScenes && FS.s2dScenes.meta && FS.s2dScenes.meta[id];
+    return (m && m.name) || id || '（未定）';
+  }
+  function sceneIsAi(id) {
+    return !!(FS.aiscene && FS.aiscene.isAi(id));
+  }
+
+  /** 重建场景下拉（选项 = 全部场景，AI 场景排在最前并标「AI」） */
   function fillSceneSelect() {
     var sel = $('f-scene');
     if (!sel || !FS.s2dScenes || !FS.s2dScenes.meta) return;
@@ -746,50 +778,89 @@
     sel.innerHTML = '';
     var auto = document.createElement('option');
     auto.value = '';
-    auto.textContent = '自动（按文案判断）';
+    auto.textContent = '自动（按这段的文案判断）';
     sel.appendChild(auto);
-    Object.keys(FS.s2dScenes.meta).forEach(function (k) {
+    var keys = Object.keys(FS.s2dScenes.meta);
+    // AI 场景排前面：用户刚画出来的应该在列表顶部一眼看见
+    keys.sort(function (a, b) {
+      var aa = sceneIsAi(a) ? 0 : 1, bb = sceneIsAi(b) ? 0 : 1;
+      return aa - bb || a.localeCompare(b);
+    });
+    keys.forEach(function (k) {
+      var m = FS.s2dScenes.meta[k];
       var o = document.createElement('option');
       o.value = k;
-      o.textContent = FS.s2dScenes.meta[k].name + '（' + FS.s2dScenes.meta[k].tags.join('·') + '）';
+      o.textContent = (sceneIsAi(k) ? '★ ' : '') + m.name;
       sel.appendChild(o);
     });
-    if (cur) sel.value = cur;
+    if (cur) sel.value = cur; else sel.value = film.scenes2d && film.scenes2d[s2dCur] || '';
   }
 
-  /** 按当前文案给每段选场景；手动指定时所有段都用它 */
+  /** 选中第 i 段（点卡片时用） */
+  function s2dPick(i) {
+    s2dCur = Math.max(0, Math.min((film.scenes.length || 1) - 1, i));
+    // ⚠️ 这里也要重建下拉：AI 场景是**注册进 FS.s2dScenes 的**，只有重建选项才会出现。
+    //   以前只有 aiPaint 成功时重建，于是「换个模型再画一段」画出来的场景
+    //   在下拉里根本看不到（卡片上有名字、点下拉却没有那条）。
+    fillSceneSelect();
+    var sel = $('f-scene');
+    if (sel) sel.value = (film.scenes2d && film.scenes2d[s2dCur]) || '';
+    drawSceneStrip();
+    redraw();
+  }
+
+  /** 每段一个小卡片：一眼看全各段是什么场景，当前段高亮 */
+  function drawSceneStrip() {
+    var box = $('f-scene-strip');
+    if (!box) return;
+    box.innerHTML = '';
+    (film.scenes || []).forEach(function (sc, i) {
+      var id = film.scenes2d && film.scenes2d[i];
+      var el = document.createElement('div');
+      el.className = 's2d' + (i === s2dCur ? ' on' : '');
+      el.title = '第 ' + (i + 1) + ' 段：' + ((sc.title || sc.text || '（无文案）').slice(0, 30)) +
+        '\n场景：' + sceneName(id) + '\n点一下改这一段';
+      var n = document.createElement('span');
+      n.className = 'n';
+      n.textContent = String(i + 1).padStart(2, '0');
+      var nm = document.createElement('span');
+      nm.className = 'nm';
+      nm.textContent = sceneName(id);
+      el.appendChild(n);
+      el.appendChild(nm);
+      if (sceneIsAi(id)) {
+        var ai = document.createElement('span');
+        ai.className = 'ai';
+        ai.textContent = 'AI';
+        el.appendChild(ai);
+      }
+      el.addEventListener('click', function () { s2dPick(i); });
+      box.appendChild(el);
+    });
+  }
+
+  /** 按当前文案给每段选场景。**只重算没被手动指定过的那几段** ——
+   *  以前是一上来整份重算，于是手动选的、AI 画的都会被冲掉。 */
   function applyScenes() {
     if (film.template !== 'daily') { film.scenes2d = null; return; }
-    var manual = $('f-scene') && $('f-scene').value;
-    if (manual) {
-      film.scenes2d = film.scenes.map(function () { return manual; });
-    } else if (FS.s2dPick) {
-      film.scenes2d = FS.s2dPick.pickScenes(film.scenes, film.sbSeed || 0);
+    if (!film.scenes2d || film.scenes2d.length !== film.scenes.length) {
+      film.scenes2d = FS.s2dPick ? FS.s2dPick.pickScenes(film.scenes, film.sbSeed || 0) : [];
     }
-    // ⚠️ AI 画过的段要**盖在自动选景之上**（2026-10-05 新增）。
-    //   以前 applyScenes 是「整份重算」，任何一次改文案都会把 AI 那一段弹回手写场景，
-    //   用户会发现「刚画好的场景莫名其妙变回咖啡馆了」——但代码完全没错，是顺序问题。
-    if (film.aiScenes) {
-      for (var k in film.aiScenes) {
-        var i = +k;
-        if (film.scenes[i] && FS.s2dScenes && FS.s2dScenes[film.aiScenes[k]]) film.scenes2d[i] = film.aiScenes[k];
-        else delete film.aiScenes[k];          // 场景被清掉了，索引也一起清
+    if (film.scenes2d.length !== film.scenes.length) {
+      while (film.scenes2d.length < film.scenes.length) {
+        film.scenes2d.push(FS.s2dPick ? FS.s2dPick.pickScene(film.scenes[film.scenes2d.length],
+          (film.sbSeed || 0) + film.scenes2d.length) : 'cafe');
       }
+      film.scenes2d.length = film.scenes.length;
     }
-    var names = (film.scenes2d || []).map(function (id) {
-      return (FS.s2dScenes.meta && FS.s2dScenes.meta[id] || {}).name || id;
-    });
-    var tip = $('f-scene-tip');
-    if (tip) { tip.hidden = false; tip.textContent = (manual ? '已手动指定 · ' : '自动 · ') + names.join(' → '); }
+    drawSceneStrip();
   }
 
   function syncTemplateUI() {
     var isDaily = film.template === 'daily';
-    var row = $('f-scene-row');
-    if (row) row.hidden = !isDaily;
-    var aiRow = $('f-aiscene-row');
-    if (aiRow) aiRow.hidden = !isDaily;
-    if (isDaily) { fillSceneSelect(); fillAiSceneSelect(); applyScenes(); }
+    var panel = $('f-scene-panel');
+    if (panel) panel.hidden = !isDaily;
+    if (isDaily) { applyScenes(); fillSceneSelect(); }
   }
 
   /* ---------------- 2D：让 AI 直接画这一段 ----------------
@@ -800,72 +871,66 @@
    * 任何一关不过就**原样保留手写场景**，只提示一句为什么 ——
    * 绝不能让成片开天窗（用户看到的黑屏比「没画 AI」糟糕得多）。
    */
-  function fillAiSceneSelect() {
-    var sel = $('f-ai-scene');
-    if (!sel) return;
-    var cur = sel.value;
-    sel.innerHTML = '';
-    var ph = document.createElement('option');
-    ph.value = '';
-    ph.textContent = '选一段…（共 ' + (film.scenes.length || 1) + ' 段）';
-    sel.appendChild(ph);
-    film.scenes.forEach(function (sc, i) {
-      var o = document.createElement('option');
-      o.value = String(i);
-      o.textContent = '第 ' + (i + 1) + ' 段 · ' + ((sc.title || sc.text || '（空）').slice(0, 16));
-      sel.appendChild(o);
-    });
-    sel.value = cur;
-  }
-
+  /** 「让 AI 画这段」画的是**当前选中那段**（s2dCur），不再另设一个「选一段…」下拉 ——
+   *  截图里两个下拉并排（场景 + 选一段）是在问用户同一个问题两遍。
+   *  既然上面已经有「每段一个卡片」了，点卡片就是选段，这里直接用 s2dCur。 */
   function aiPaint() {
-    if (!FS.aiscene) { hint($('f-ai-status'), '✗ aiscene.js 没加载', 'bad'); return; }
-    if (!FS.script) { hint($('f-ai-status'), '✗ 文案模块没加载', 'bad'); return; }
-    var idx = parseInt(($('f-ai-scene') && $('f-ai-scene').value) || '0', 10) || 0;
+    if (!FS.aiscene) { hint($('f-ai-status'), '✗ aiscene.js 没加载（刷新页面试试）', 'bad'); return; }
+    if (!FS.script) { hint($('f-ai-status'), '✗ 文案模块没加载（刷新页面试试）', 'bad'); return; }
+    if (film.template !== 'daily') {
+      hint($('f-ai-status'), '✗ 只有「生活场景（2D 插画）」这个画法能用 AI 画场景', 'bad');
+      return;
+    }
+    var idx = s2dCur;
     var sc = film.scenes[idx];
     if (!sc || (!sc.text && !sc.title)) {
-      hint($('f-ai-status'), '✗ 第 ' + (idx + 1) + ' 段没有文案，先填内容', 'bad');
+      hint($('f-ai-status'), '✗ 第 ' + (idx + 1) + ' 段还没填文案，先在上面写一句', 'bad');
       return;
     }
     var cfg = FS.script.loadCfg ? FS.script.loadCfg() : null;
     if (!cfg || !cfg.key) {
-      hint($('f-ai-status'), '✗ 还没填 API Key —— 画场景要联网调模型，去「API 设置」填一个', 'bad');
+      hint($('f-ai-status'), '✗ 还没填 API Key。画场景要用模型 —— 拉到上面「文案助手」的 Key 输入框里填一个，再回来点。', 'bad');
       return;
     }
     var btn = $('f-ai-paint');
     var old = btn.textContent;
     btn.disabled = true;
     var id = 'ai-' + idx;
-    var prompt = FS.aiscene.prompt({
-      title: sc.title, text: sc.text,
-      mood: film.mood || '克制准确'
-    });
+    var prompt = FS.aiscene.prompt({ title: sc.title, text: sc.text, mood: '克制准确' });
     btn.textContent = '⏳ AI 正在画…';
-    hint($('f-ai-status'), '⏳ 第 ' + (idx + 1) + ' 段：模型写码中（10~40 秒）…', 'ok');
+    hint($('f-ai-status'), '⏳ 第 ' + (idx + 1) + ' 段：模型在写绘制代码（10~40 秒，别切走）…', 'ok');
 
     FS.script.callApi(cfg, prompt, function (txt) { return txt; }).then(function (raw) {
       var code = FS.aiscene.extract(raw);
       var reg = FS.aiscene.register(id, code, { name: 'AI·' + (sc.title || ('第' + (idx + 1) + '段')), tag: '按文案现画' });
-      // 这一段指向新场景；别让 applyScenes 把它当「手动指定」覆盖掉
-      film.scenes2d = film.scenes2d || FS.s2dPick.pickScenes(film.scenes, film.sbSeed || 0);
-      film.scenes2d[idx] = id;
+      applyScenes();                    // 先把长度对齐
+      film.scenes2d[idx] = id;          // 这一段指向新场景
       film.aiScenes = film.aiScenes || {};
       film.aiScenes[idx] = id;
       fillSceneSelect();
+      drawSceneStrip();
       drawTimeline();
       redraw();
-      hint($('f-ai-status'), '✓ 第 ' + (idx + 1) + ' 段已由 AI 画出（' + reg.calls +
-        ' 次绘制调用）。预览里右上角角标会写「AI 场景」；不满意点「换一版」重画。', 'ok');
+      hint($('f-ai-status'), '✓ 第 ' + (idx + 1) + ' 段画好了（' + reg.calls +
+        ' 次绘制）。上面那张卡片会标「AI」。不满意就再点一次「让 AI 画这段」重画。', 'ok');
     })['catch'](function (e) {
       // ★ 失败一律退回手写场景，绝不让这一段变黑屏
       FS.aiscene.unregister(id);
-      hint($('f-ai-status'), '✗ AI 这次没画成（' + (e && e.message ? e.message : '未知原因') +
-        '）—— 已保留原来的手写场景，片子照常出。', 'bad');
+      if (film.scenes2d && film.scenes2d[idx] === id) {
+        film.scenes2d[idx] = FS.s2dPick ? FS.s2dPick.pickScene(
+          (film.scenes[idx].title || '') + ' ' + (film.scenes[idx].text || ''), idx) : 'cafe';
+        delete film.aiScenes[idx];
+      }
+      drawSceneStrip();
+      redraw();
+      hint($('f-ai-status'), '✗ 这次没画成（' + (e && e.message ? e.message : '未知原因') +
+        '）。已经退回手写场景，片子照常出 —— 换个模型或再点一次试试。', 'bad');
     })['finally'](function () {
       btn.disabled = false;
       btn.textContent = old;
     });
   }
+
 
   function aiClear() {
     if (!FS.aiscene) return;
@@ -873,31 +938,56 @@
     for (var k in FS.s2dScenes || {}) {
       if (FS.aiscene.isAi(k)) { FS.aiscene.unregister(k); n++; }
     }
+    // ⚠️ 别把 film.scenes2d 整个置 null —— 那会让 applyScenes 整份重算，
+    //   把用户**手动指定过**的段也一起冲掉。逐段换回自动选景，其余保持不变。
     film.aiScenes = {};
-    film.scenes2d = null;
+    for (var i = 0; i < (film.scenes2d || []).length; i++) {
+      var sc = film.scenes[i] || {};
+      film.scenes2d[i] = FS.s2dPick
+        ? FS.s2dPick.pickScene((sc.title || '') + ' ' + (sc.text || ''), (film.sbSeed || 0) + i)
+        : 'cafe';
+    }
     fillSceneSelect();
-    applyScenes();
+    drawSceneStrip();
     drawTimeline();
     redraw();
-    hint($('f-ai-status'), n ? ('已清除 ' + n + ' 个 AI 场景，全部退回手写场景。') : '当前没有 AI 场景。', 'ok');
+    hint($('f-ai-status'), n ? ('已清除 ' + n + ' 个 AI 场景，那几段退回手写场景。') : '当前没有 AI 场景。', 'ok');
   }
 
-  $('f-scene').addEventListener('change', function () { readFilm(); applyScenes(); redraw(); });
+  /* 场景下拉**只改当前选中那段**。
+   * ⚠️ 原来这里是 `film.scenes2d = film.scenes.map(() => manual)` ——
+   *   一次改动把**所有段**都设成同一个场景。截图里 4 段全变成那个 AI 场景
+   *   就是这么来的（用户看到「AI·对称… → AI·对称… → AI·对称… → AI·对称…」）。
+   *   母题下拉才是「全片统一」的东西，场景是逐段的。 */
+  $('f-scene').addEventListener('change', function () {
+    var v = this.value;
+    applyScenes();
+    film.scenes2d = film.scenes2d || [];
+    if (v) {
+      film.scenes2d[s2dCur] = v;
+      if (film.aiScenes) delete film.aiScenes[s2dCur];   // 手动改了，这一段就不再算 AI 画的
+    } else if (FS.s2dPick) {
+      var sc = film.scenes[s2dCur] || {};
+      film.scenes2d[s2dCur] = FS.s2dPick.pickScene(
+        (sc.title || '') + ' ' + (sc.text || ''), (film.sbSeed || 0) + s2dCur);
+      if (film.aiScenes) delete film.aiScenes[s2dCur];
+    }
+    drawSceneStrip();
+    drawTimeline();
+    redraw();
+  });
   $('f-ai-paint').addEventListener('click', aiPaint);
   $('f-ai-clear').addEventListener('click', aiClear);
-  $('f-ai-scene').addEventListener('change', function () {
-    var i = +this.value;
-    var sc = film.scenes[i];
-    if (!sc) return;
-    // 换一段时先说说这一段要画什么，别让用户点了按钮才知道选错段
-    var already = film.aiScenes && film.aiScenes[i] && FS.aiscene && FS.aiscene.isAi(film.aiScenes[i]);
-    hint($('f-ai-status'), '第 ' + (i + 1) + ' 段' + (already ? '（这一段已经是 AI 画的，再点会重画）' : '') +
-      '：' + ((sc.text || sc.title || '（无文案）').slice(0, 24)), already ? 'ok' : '');
-  });
   $('f-scene-auto').addEventListener('click', function () {
-    $('f-scene').value = '';
+    // 「全部按文案自动选」= 忘掉所有手动指定与 AI 场景，换一批种子重选
     film.sbSeed = (FS.director.fnv(String(film.sbSeed) + '|s2d')) >>> 0;
-    readFilm(); applyScenes(); redraw();
+    film.aiScenes = {};
+    film.scenes2d = FS.s2dPick ? FS.s2dPick.pickScenes(film.scenes, film.sbSeed) : null;
+    fillSceneSelect();
+    drawSceneStrip();
+    drawTimeline();
+    redraw();
+    hint($('f-ai-status'), '已按文案重新给 ' + (film.scenes.length || 0) + ' 段各选了一个场景。', 'ok');
   });
 
   $('f-engine').addEventListener('change', function () { setEngine(this.value); });
@@ -967,6 +1057,10 @@
         fBuf = null;                               // 判为不合拍 → 这台机器这次就没配乐可放
         hint($('f-musicsrc'), '⏹ ' + p.reason + ' → 这次不配乐，只有画面' +
           (film.audmode === 'both' ? ' + 人声' : '（纯音乐模式，配乐判为不合拍）'), 'bad');
+      } else if (p.use && p.byBeats) {
+        // 明确告诉用户「现在没字幕，是按段落配的」—— 不说的话他会以为
+        // 「配乐跟着字幕走」这个卖点没生效（用户原话：「没有背景音乐」）。
+        hint($('f-musicsrc'), musicLabel + ' · 还没填字幕，先按每段的节奏配乐；填了字幕会自动改成跟句子走');
       }
       // ⚠️ fBuf 以前压根没人赋值过，等于「预览配乐」这个开关一直是死的。
       //    现在按计划渲染一次（同一个 buffer，试听/导出/预览听到的都是它）。
@@ -1092,7 +1186,8 @@
     var rep = FS.scoreSync.syncReport(raw, film);
     var out = FS.scoreSync.apply(raw, film, rep);
     musicPlanCache = { raw: out.score || raw, use: rep.use, reason: rep.reason,
-      ratio: rep.ratio, anchors: rep.anchors, snapped: !!out.score };
+      ratio: rep.ratio, anchors: rep.anchors, snapped: !!out.score,
+      byBeats: !!rep.fallbackBeats };
     musicPlanKey = k;
     refreshMusicLine();      // 只在重新体检后写一次，拖进度条不会一直重写这行字
     return musicPlanCache;
@@ -1103,8 +1198,10 @@
     if (!mh) return;
     var p = musicPlan();                        // 命中缓存时不重算
     var tail = p.use
-      ? '跟字幕对齐：' + p.anchors.length + ' 个落点（' + p.reason + '）'
-      : '⏹ ' + p.reason + ' → 这次不配乐，只有画面 + 配音';
+      ? (p.byBeats
+          ? '按每段中点对齐：' + p.anchors.length + ' 个落点（还没填字幕，先按段落走）'
+          : '跟字幕对齐：' + p.anchors.length + ' 个落点（' + p.reason + '）')
+      : '⏹ ' + p.reason + ' → 这次不配乐，只有画面';
     hint(mh, musicLabel + ' · ' + tail);
   }
 
@@ -1112,8 +1209,10 @@
   function musicHint() {
     var p = musicPlan();
     return p.use
-      ? '配乐已按字幕断句对齐（' + p.anchors.length + ' 个落点，' + p.reason + '）'
-      : '⏹ ' + p.reason + ' → 这次不配乐，只有画面 + 配音';
+      ? (p.byBeats
+          ? '配乐已按段落对齐（' + p.anchors.length + ' 个落点）'
+          : '配乐已按字幕断句对齐（' + p.anchors.length + ' 个落点，' + p.reason + '）')
+      : '⏹ ' + p.reason + ' → 这次不配乐，只有画面';
   }
   /* ---------------- 配音（服务器 edge-tts，ffmpeg 级中文音色） ---------------- */
   var narrCache = {};          // 'voice|text' -> AudioBuffer，预览/导出共用

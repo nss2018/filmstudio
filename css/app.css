@@ -317,3 +317,31 @@ input[type=range]{width:100%;max-width:220px;accent-color:var(--accent)}
   color:var(--ink-2);font-size:11.5px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;
 }
 .foot span:last-child{border:1px solid var(--rule);border-radius:3px;padding:2px 8px;background:var(--card)}
+
+/* ================================================================
+ *  [hidden] 必须真的隐藏（2026-10-05 修）
+ *
+ *  截图里「3D 画质」在画面引擎=2D 时也露出来了。原因：
+ *  `label{display:flex}` 和 `.fl{display:block}` 都是**类/元素选择器**，
+ *  优先级高于 UA 样式表里的 `[hidden]{display:none}` —— 于是 hidden 属性
+ *  被「display 声明」盖掉，元素照样显示。
+ *  这不是某个控件的偶发问题，而是**所有用 hidden 控制的行**都会中招
+ *  （3D 导演面板、场景行、字幕时间码…）。
+ *  正解：全局加一条 `!important`（`!important` 才是这里唯一该用的场合——
+ *  它要压的正是「别的选择器自带 display」这一类冲突）。
+ * ================================================================ */
+[hidden]{display:none !important}
+
+/* ---- 场景面板：每段一个卡片，点卡片左边切换当前段 ---- */
+.scenes2d{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.scenes2d .s2d{
+  display:flex;align-items:center;gap:6px;
+  padding:5px 9px;border:1px solid var(--rule-2);border-radius:4px;
+  background:var(--trough);font-size:12px;color:var(--ink-2);cursor:pointer;
+  max-width:210px;user-select:none;
+}
+.scenes2d .s2d:hover{border-color:var(--accent);color:var(--ink)}
+.scenes2d .s2d.on{border-color:var(--accent);background:rgba(192,90,56,.07);color:var(--ink);font-weight:600}
+.scenes2d .s2d .n{font-family:ui-monospace,monospace;font-size:10px;color:var(--ink-3);flex:none}
+.scenes2d .s2d .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.scenes2d .s2d .ai{color:var(--accent);font-size:10px;flex:none;font-weight:700}

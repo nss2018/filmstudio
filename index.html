@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>科普宣传片工坊 · 配乐 + 渲染，一处出片</title>
-<link rel="stylesheet" href="css/app.css?v=20261005p">
+<link rel="stylesheet" href="css/app.css?v=20261005q">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
@@ -265,19 +265,17 @@
           <div class="hint">分镜是<b>种子驱动</b>的：同文案 + 同种子 = 同一部片子；点「换一版」换种子，地点走位、镜头、氛围都会变，但主角和叙事线不变。AI 导演只允许「调」，地点/角色/动作/镜头都按白名单校验，模型编的非法值会被本地规则顶掉。</div>
         </div>
 
-        <div class="field-row" id="f-scene-row" hidden>
-          <label class="fl">场景（每段一个，可手动覆盖）<select id="f-scene"></select></label>
-          <button id="f-scene-auto" class="btn ghost"><svg class="ico"><use href="#i-dice"/></svg>按文案自动选</button>
-        </div>
-        <div class="field-row" id="f-aiscene-row" hidden>
-          <label class="fl">AI 画场景
-            <select id="f-ai-scene">
-              <option value="">选一段…</option>
-            </select>
-          </label>
-          <button id="f-ai-paint" class="btn"><svg class="ico"><use href="#i-film"/></svg>让 AI 画这段</button>
-          <button id="f-ai-clear" class="btn ghost" title="删掉所有 AI 画的场景，回到手写场景">清除 AI 场景</button>
-          <span class="mono dim" id="f-ai-status">让模型按这一段的文案直接写绘制代码；画不好会自动退回手写场景。</span>
+        <div id="f-scene-panel" hidden>
+          <div class="field-row">
+            <label class="fl">这段用哪个场景<select id="f-scene"></select></label>
+            <button id="f-scene-auto" class="btn ghost"><svg class="ico"><use href="#i-dice"/></svg>全部按文案自动选</button>
+          </div>
+          <div class="scenes2d" id="f-scene-strip"></div>
+          <div class="btn-row wrap" style="margin-top:8px">
+            <button id="f-ai-paint" class="btn"><svg class="ico"><use href="#i-film"/></svg>让 AI 画这段</button>
+            <button id="f-ai-clear" class="btn ghost">清除 AI 场景</button>
+            <span class="mono dim" id="f-ai-status">让模型按这段的文案直接写绘制代码；画不好会自动退回手写场景。</span>
+          </div>
         </div>
         <div class="field-row" id="f-2d-row">
           <label class="fl">视觉母题
@@ -287,9 +285,8 @@
               <option value="bars">数据演进（柱子生长）</option>
               <option value="split">对比演示（左右分屏）</option>
               <option value="geo">几何演化（多边形）</option>
-              <option value="daily">生活场景（2D 插画 · 18 种）</option>
+              <option value="daily">生活场景（2D 插画）</option>
             </select>
-            <span class="mono dim" id="f-scene-tip" hidden>按文案自动选场景</span>
           </label>
           <label class="fl">配色
             <select id="f-palette">
@@ -377,32 +374,32 @@
   <span class="mono" id="probe-badge"></span>
 </footer>
 
-<script src="js/type.js?v=20261005p"></script>
-<script src="js/aiscene.js?v=20261005p"></script>
-<script src="js/theme.js?v=20261005p"></script>
-<script src="js/score.js?v=20261005p"></script>
-<script src="js/wav.js?v=20261005p"></script>
-<script src="js/synth.js?v=20261005p"></script>
-<script src="js/story.js?v=20261005p"></script>
-<script src="js/factory.js?v=20261005p"></script>
-<script src="js/gl/core.js?v=20261005p"></script>
-<script src="js/gl/lru.js?v=20261005p"></script>
-<script src="js/gl/geom.js?v=20261005p"></script>
-<script src="js/gl/camera.js?v=20261005p"></script>
-<script src="js/gl/world.js?v=20261005p"></script>
-<script src="js/gl/cast.js?v=20261005p"></script>
-<script src="js/gl/render.js?v=20261005p"></script>
-<script src="js/director.js?v=20261005p"></script>
-<script src="js/gl/world2.js?v=20261005p"></script>
-<script src="js/gl/world3.js?v=20261005p"></script>
-<script src="js/scene2d/core.js?v=20261005p"></script>
-<script src="js/scene2d/scenes.js?v=20261005p"></script>
-<script src="js/scene2d/scenes2.js?v=20261005p"></script>
-<script src="js/scene2d/scenes3.js?v=20261005p"></script>
-<script src="js/scene2d/pick.js?v=20261005p"></script>
-<script src="js/roll.js?v=20261005p"></script>
-<script src="js/scoresync.js?v=20261005p"></script>
-<script src="js/script.js?v=20261005p"></script>
-<script src="js/main.js?v=20261005p"></script>
+<script src="js/type.js?v=20261005q"></script>
+<script src="js/aiscene.js?v=20261005q"></script>
+<script src="js/theme.js?v=20261005q"></script>
+<script src="js/score.js?v=20261005q"></script>
+<script src="js/wav.js?v=20261005q"></script>
+<script src="js/synth.js?v=20261005q"></script>
+<script src="js/story.js?v=20261005q"></script>
+<script src="js/factory.js?v=20261005q"></script>
+<script src="js/gl/core.js?v=20261005q"></script>
+<script src="js/gl/lru.js?v=20261005q"></script>
+<script src="js/gl/geom.js?v=20261005q"></script>
+<script src="js/gl/camera.js?v=20261005q"></script>
+<script src="js/gl/world.js?v=20261005q"></script>
+<script src="js/gl/cast.js?v=20261005q"></script>
+<script src="js/gl/render.js?v=20261005q"></script>
+<script src="js/director.js?v=20261005q"></script>
+<script src="js/gl/world2.js?v=20261005q"></script>
+<script src="js/gl/world3.js?v=20261005q"></script>
+<script src="js/scene2d/core.js?v=20261005q"></script>
+<script src="js/scene2d/scenes.js?v=20261005q"></script>
+<script src="js/scene2d/scenes2.js?v=20261005q"></script>
+<script src="js/scene2d/scenes3.js?v=20261005q"></script>
+<script src="js/scene2d/pick.js?v=20261005q"></script>
+<script src="js/roll.js?v=20261005q"></script>
+<script src="js/scoresync.js?v=20261005q"></script>
+<script src="js/script.js?v=20261005q"></script>
+<script src="js/main.js?v=20261005q"></script>
 </body>
 </html>

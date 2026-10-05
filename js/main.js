@@ -1132,6 +1132,72 @@
       })['finally'](function () { btn.disabled = false; });
   });
 
+  /* ---------------- 一键成片（联网全自动） ----------------
+   * 一个来回让模型把「主题 + 具象例子 + 片名 + 每段字幕 + 每段分镜」全吐出来，页面上
+   * 一个字都不用填；分镜一合入就直接开导出，不用再点「生成文案 / 生成分镜 / 导出」。
+   *
+   * ⚠️ 没 Key 时**不偷偷回落到本地模板**——那样会产生一个很坏的错觉：
+   *    你以为片子是 AI 出的，其实渲染的是上一次的旧文案。宁可报错说清楚。
+   */
+  function autoFilm(btn) {
+    var k = $('sw-key').value.trim() || (cfg && cfg.key) || '';
+    var eff = {
+      base: $('sw-base').value.trim() || (cfg && cfg.base) || '',
+      key: k,
+      model: $('sw-model').value.trim() || (cfg && cfg.model) || ''
+    };
+    if (!eff.key) {
+      var fold = $('api-fold');
+      if (fold) fold.open = true;
+      hint($('sw-status'), '✗ 一键成片要联网：展开「API 设置」选个服务商（如火山方舟豆包）并填 Key，Key 只存你自己浏览器', 'bad');
+      return;
+    }
+    if (!eff.base || !eff.model) {
+      hint($('sw-status'), '✗ Base 或模型还是空的——展开「API 设置」选一下服务商，会自动补上', 'bad');
+      return;
+    }
+    btn.disabled = true;
+    hint($('sw-status'), 'AI 正在想主题、找例子、写字幕、排分镜…（一次往返，别走开）');
+    // 用户填了就照他的写，没填就传空串让模型自己想（prompt 里会提示"用户没给，请自拟"）
+    FS.director.auto(eff, {
+      engine: $('f-engine').value,
+      count: parseInt($('sw-count').value, 10) || 4,
+      topic: $('sw-topic').value.trim(),
+      example: $('sw-example').value.trim()
+    }).then(function (j) {
+      // ① 片名 + 段落灌进 UI
+      if (j.topic) $('sw-topic').value = j.topic;
+      if (j.example) $('sw-example').value = j.example;
+      $('f-title').value = j.title || '未命名';
+      var box = $('f-scenes');
+      box.innerHTML = '';
+      (j.scenes || []).forEach(function (s) { addScene({ title: s.title, text: s.text }); });
+      readFilm();
+      // ② 拍数跟着字数走（别让 22 字挤出 2 秒）
+      var adv = FS.script.advice(film.scenes, film.bpm);
+      $('f-beats').value = adv.beats;
+      readFilm();
+      redraw();
+      // ③ 分镜：本地先推一版保证有合法值，再把模型给的盖上去
+      film.sbSeed = null;
+      var sb0 = FS.director.build(directorOpts());
+      var merged = (j.shots && j.shots.length) ? FS.director.mergeLLM(sb0, j) : sb0;
+      film.sbSeed = sb0.seed;
+      applySB(merged);
+      hint($('sw-status'), '✓ 成片就绪：' + (merged.title || '未命名') + ' · ' + merged.shots.length +
+        ' 段 · 主场景 ' + ((FS.world.placeById(merged.place) || {}).name || merged.place) +
+        ' · AI 例子「' + (j.example || '—') + '」，正在导出…', 'ok');
+      // ④ 直接开导出（3D 要建 GL 上下文，给一拍的余地）
+      setTimeout(function () {
+        try { $('f-render').click(); }
+        catch (e) { hint($('f-status'), '✗ ' + e.message + '（手动点『导出视频』即可）', 'bad'); }
+      }, 400);
+    })['catch'](function (e) {
+      hint($('sw-status'), '✗ ' + e.message + '（没动你已经填的内容，改好再试一次）', 'bad');
+    })['finally'](function () { btn.disabled = false; });
+  }
+  $('sw-auto').addEventListener('click', function () { autoFilm(this); });
+
   $('sw-apply').addEventListener('click', function () {
     var out = FS.script.local(scriptOpts());
     applyScript(out);

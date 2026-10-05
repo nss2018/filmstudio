@@ -4,11 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>科普宣传片工坊 · 配乐 + 渲染，一处出片</title>
-<link rel="stylesheet" href="css/app.css?v=20261005d">
+<link rel="stylesheet" href="css/app.css?v=20261005e">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
   <symbol id="i-clapper" viewBox="0 0 24 24"><path d="M3 6l3.5-1.8L10 6l3.5-1.8L17 6l3.5-1.8V10H3z"/><rect x="3" y="10" width="18" height="4"/><rect x="3" y="14" width="18" height="6"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4 14h5.5L9 22l9-12h-5.5z"/></symbol>
   <symbol id="i-music" viewBox="0 0 24 24"><circle cx="6" cy="17.5" r="3"/><circle cx="18" cy="15.5" r="3"/><path d="M9 17.5V4.5l12-2v13"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 3.5l14 8.5-14 8.5z"/></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></symbol>
@@ -173,7 +174,7 @@
           <span class="mono dim" id="sw-status">—</span>
         </div>
         <div class="field-row">
-          <label class="fl">主题<input type="text" id="sw-topic" value="群论"></label>
+          <label class="fl">主题<span class="dim">（留空＝AI 自己想；填了就照着写）</span><input type="text" id="sw-topic" placeholder="例如：下班路上的那碗面"></label>
           <label class="fl">具象例子<span class="dim">（选填，填了句子更好懂）</span><input type="text" id="sw-example" placeholder="例如：旋转的正方形"></label>
         </div>
         <div class="field-row">
@@ -188,13 +189,14 @@
           </label>
         </div>
         <div class="btn-row">
+          <button id="sw-auto" class="btn primary"><svg class="ico"><use href="#i-bolt"/></svg>一键成片（联网全自动）</button>
           <button id="sw-go" class="btn primary"><svg class="ico"><use href="#i-edit"/></svg>生成文案</button>
           <button id="sw-apply" class="btn"><svg class="ico"><use href="#i-download"/></svg>填进下面的段落</button>
           <button id="sw-advice" class="btn ghost">给个每段拍数建议</button>
         </div>
         <div class="hint" id="sw-out">本地模板：不联网、不要 Key，按「主题 + 风格」拼出片名和每段字幕，同一个主题每次生成都一样，方便反复调。AI 通道：走你自己的 API Key，写脚本更灵活。</div>
 
-        <details class="fold">
+        <details class="fold" id="api-fold">
           <summary>API 设置（只存你自己浏览器里）</summary>
           <div class="fold-body">
             <div class="field-row">
@@ -346,29 +348,29 @@
   <span class="mono" id="probe-badge"></span>
 </footer>
 
-<script src="js/theme.js?v=20261005d"></script>
-<script src="js/score.js?v=20261005d"></script>
-<script src="js/wav.js?v=20261005d"></script>
-<script src="js/synth.js?v=20261005d"></script>
-<script src="js/story.js?v=20261005d"></script>
-<script src="js/factory.js?v=20261005d"></script>
-<script src="js/gl/core.js?v=20261005d"></script>
-<script src="js/gl/lru.js?v=20261005d"></script>
-<script src="js/gl/geom.js?v=20261005d"></script>
-<script src="js/gl/camera.js?v=20261005d"></script>
-<script src="js/gl/world.js?v=20261005d"></script>
-<script src="js/gl/cast.js?v=20261005d"></script>
-<script src="js/gl/render.js?v=20261005d"></script>
-<script src="js/director.js?v=20261005d"></script>
-<script src="js/gl/world2.js?v=20261005d"></script>
-<script src="js/gl/world3.js?v=20261005d"></script>
-<script src="js/scene2d/core.js?v=20261005d"></script>
-<script src="js/scene2d/scenes.js?v=20261005d"></script>
-<script src="js/scene2d/scenes2.js?v=20261005d"></script>
-<script src="js/scene2d/scenes3.js?v=20261005d"></script>
-<script src="js/scene2d/pick.js?v=20261005d"></script>
-<script src="js/roll.js?v=20261005d"></script>
-<script src="js/script.js?v=20261005d"></script>
-<script src="js/main.js?v=20261005d"></script>
+<script src="js/theme.js?v=20261005e"></script>
+<script src="js/score.js?v=20261005e"></script>
+<script src="js/wav.js?v=20261005e"></script>
+<script src="js/synth.js?v=20261005e"></script>
+<script src="js/story.js?v=20261005e"></script>
+<script src="js/factory.js?v=20261005e"></script>
+<script src="js/gl/core.js?v=20261005e"></script>
+<script src="js/gl/lru.js?v=20261005e"></script>
+<script src="js/gl/geom.js?v=20261005e"></script>
+<script src="js/gl/camera.js?v=20261005e"></script>
+<script src="js/gl/world.js?v=20261005e"></script>
+<script src="js/gl/cast.js?v=20261005e"></script>
+<script src="js/gl/render.js?v=20261005e"></script>
+<script src="js/director.js?v=20261005e"></script>
+<script src="js/gl/world2.js?v=20261005e"></script>
+<script src="js/gl/world3.js?v=20261005e"></script>
+<script src="js/scene2d/core.js?v=20261005e"></script>
+<script src="js/scene2d/scenes.js?v=20261005e"></script>
+<script src="js/scene2d/scenes2.js?v=20261005e"></script>
+<script src="js/scene2d/scenes3.js?v=20261005e"></script>
+<script src="js/scene2d/pick.js?v=20261005e"></script>
+<script src="js/roll.js?v=20261005e"></script>
+<script src="js/script.js?v=20261005e"></script>
+<script src="js/main.js?v=20261005e"></script>
 </body>
 </html>

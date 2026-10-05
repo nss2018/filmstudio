@@ -503,10 +503,14 @@
       if (m.place && FS.world.placeById(m.place)) s.place = m.place;
       s.indoor = placeIndoor(s.place);
       if (typeof m.note === 'string' && m.note) s.note = m.note.slice(0, 40);
-      if (m.shotType && C.EASE && SHOT_TYPES.indexOf(m.shotType) >= 0) {
-        var spots = SPOTS[s.place] || { stand: [[0, 0]] };
+      // ⚠️ 这里查 SHOT_KIND 而不是 SHOT_TYPES：SHOT_TYPES 是「给模型看的说法」白名单，
+      //    SHOT_KIND 才是「导演说法 → 渲染层镜头」的映射。曾经拿 SHOT_TYPES 当门禁，
+      //    于是模型给 crane / wide / follow / pan 一律被外层挡掉、原样保留本地镜头，
+      //    看起来"没报错"，其实是悄悄没采纳模型的意思。
+      var kind = typeof m.shotType === 'string' ? SHOT_KIND[m.shotType.trim().toLowerCase()] : null;
+      if (kind && C.EASE) {
         var mid = s.cast.length ? [s.cast[0].from[0], s.cast[0].eye, s.cast[0].from[2]] : [0, 1.2, 0];
-        s.shot = shotFor(SHOT_KIND[m.shotType] || 'push', r, s.indoor, mid);
+        s.shot = shotFor(kind, r, s.indoor, mid);
       }
       if (Array.isArray(m.cast) && m.cast.length) {
         var legal = m.cast.filter(function (c) { return !!FS.cast.castById(c) && (HABITAT[c] || []).indexOf(s.place) >= 0; });
@@ -538,7 +542,20 @@
   }
 
   var SHOT_TYPES = ['establish', 'push', 'track', 'orbit', 'pullout'];
-  var SHOT_KIND = { establish: 'establish', push: 'push', track: 'track', orbit: 'orbit', pullout: 'pullout', wide: 'establish', close: 'push' };
+  /* 模型给的是「导演说法」（establish / push / pullout），渲染层认的是另一套
+   * （orbit / dolly_in / pan / follow / push_orbit / crane），靠这张表对齐。
+   * ⚠️ 必须铺开映射：否则模型顺着影视语感写 crane（想拉远收尾）会落空，
+   *    被 `|| 'push'` 兜底成推近——一段该收尾的镜头变成怼脸，观众看不懂。 */
+  var SHOT_KIND = {
+    establish: 'establish', wide: 'establish', wideshot: 'establish', longshot: 'establish', 'wide-shot': 'establish',
+    push: 'push', pushin: 'push', push_in: 'push', dolly: 'push', dollyin: 'push', dolly_in: 'push',
+    in: 'push', close: 'push', closeup: 'push', close_up: 'push', 推近: 'push',
+    track: 'track', tracking: 'track', tracking_shot: 'track', follow: 'track', followcam: 'track',
+    pan: 'track', panning: 'track', moving: 'track', 横移: 'track',
+    orbit: 'orbit', circling: 'orbit', ring: 'orbit', 环绕: 'orbit',
+    pullout: 'pullout', pullback: 'pullback', pull_back: 'pullout', pullbackshot: 'pullout',
+    crane: 'pullout', craneup: 'pullout', out: 'pullout', 拉远: 'pullout', 收尾: 'pullout'
+  };
 
   /* ==================== LLM 通道 ==================== */
 
@@ -576,6 +593,125 @@
     ].join('\n');
   }
 
+  /* ==================== 一键成片（全自动） ====================
+   * 原来要三步：填「主题 + 具象例子」→ 生成文案 → 按文案生成分镜。
+   * 联网时这三步都能省——让模型在一个来回里把
+   * 「主题 / 具象例子 / 片名 / 每段字幕 / 每段分镜」全吐出来，本地只做白名单校验。
+   *
+   * 不只是少点两次：模型同时看得见「自己刚写的字幕」和「要画的画面」，
+   * 分镜才不会跟字幕拧着（以前是两次请求，第二个请求看不见第一个的产出）。
+   */
+
+  /* 中文地名 → place id。
+   * ⚠️ 必须存在的理由：world 里登记的 name 是繁体（咖啡館/公園/海邊），
+   * 而模型（豆包等）几乎一律回简体，直接丢给白名单会被当成非法值顶掉。 */
+  var PLACE_ALIAS = {
+    // 模型最爱说日常叫法（便利店/面馆/大排档），都得能落回 id，否则会被白名单顶掉
+    cafe: '咖啡馆,咖啡廳,咖啡店,cafe,咖啡,咖啡館,便利店,便利商店,小卖部,小賣部,杂货店,雜貨店,奶茶店,饮品店,甜品店',
+    street: '街道,街上,马路,馬路,大街,路上,街,street',
+    park: '公园,公園,park,公园里,散步',
+    seaside: '海边,海邊,海岸,海灘,沙滩,沙灘,海滨,海濱,seaside',
+    study: '书房,書房,书屋,书桌',
+    lab: '实验室,實驗室,化验室,試驗室,试验室,lab',
+    kitchen: '厨房,廚房,灶台,下厨,kitchen,餐馆,飯館,面馆,麵館,餐厅,餐廳,食堂,早餐店,小吃店,烘焙厨房',
+    nightmarket: '夜市,夜市摊,路边摊,攤販,摊贩,nightmarket,大排档,大排檔,烧烤摊,烧烤攤',
+    bedroom: '卧室,臥室,睡房,床边,床邊',
+    market: '菜市场,菜市場,菜场,菜場,农贸市场,农贸市場,市场,市場,超市,菜市',
+    metro: '地铁,地鐵,地铁站,地鐵站,地铁站台,metro',
+    campus: '校园,校園,学校,學校,操场,操場,大学',
+    rainstreet: '雨中街道,雨中,雨夜街道,雨巷,下雨的街道,rainstreet',
+    balcony: '阳台,陽台,天台,露台,balcony',
+    livingroom: '客厅,客廳,起居室,沙发上,livingroom',
+    office: '办公室,辦公室,办公,公司,工位',
+    bakery: '面包房,麵包房,面包店,烘焙店,烘焙坊,bakery',
+    hospital: '医院,醫院,病房,病床,医院病房',
+    farmfield: '田埂,麦田,麥田,田野,稻田,农田,農田,farmfield',
+    busstop: '公交站,公交站台,车站,車站,公交,站牌,公車站,busstop'
+  };
+
+  /** 把模型给的地点名（简体/繁体/id/带"的""里""上"）解析成本地 place id；认不出返回 null
+   *  ⚠️ 这里删的字符要克制：只删助词（的/里/上/过/和/而）。
+   *     曾经把「中」也删了，于是「雨中街道」被削成「雨街道」→ 包含匹配落到 street，
+   *     雨夜场景的片子全变普通街道。别再加「中」进这个字符类。 */
+  function resolvePlace(x) {
+    if (x === null || x === undefined) return null;
+    var s = String(x).trim().replace(/[的里上过和而]/g, '').trim();
+    if (!s) return null;
+    var ids = FS.world.placeIds();
+    if (ids.indexOf(s) >= 0) return s;                      // 模型直接给了 id（最理想）
+    if (PLACE_ALIAS[s]) return PLACE_ALIAS[s];              // 精确别名
+    // 兜底：包含匹配，取最长命中（"雨夜的街道" → 靠"街道"拿到 street，靠"雨中"拿不到就退回 street）
+    var best = null, blen = 0;
+    FS.world.PLACES.forEach(function (p) {
+      var cands = [p.id, p.name].concat((PLACE_ALIAS[p.id] || '').split(','));
+      cands.forEach(function (c) {
+        if (!c) return;
+        c = String(c).trim();
+        if (c && s.indexOf(c) >= 0 && c.length > blen) { best = p.id; blen = c.length; }
+      });
+    });
+    return best;
+  }
+
+  /** 一键成片的 prompt：连主题带例子带文案带分镜一次要齐 */
+  function autoPrompt(o) {
+    o = o || {};
+    var eng = o.engine === '3d' ? '3D' : '2D';
+    var picture = o.engine === '3d'
+      ? '画面是 WebGL 实时渲染的低多边形 3D 生活场景（客厅、办公室、面包房、医院病房、田埂麦田、公交站、咖啡馆、公园、街道、菜市场、地铁站、校园、阳台、雨中街道、海边、夜市、厨房、卧室、书房、实验室，人物和动物在里面活动）'
+      : '画面是 Canvas2D 手绘的生活插画（厨房、菜市场、雨巷、客厅、田埂、公园、海边、办公室、站台，平涂色块，有角色在动）';
+    var n = o.count || 4;
+    return [
+      '你是一个生活类短片的编剧兼分镜导演，要交出**一整部片子**的全部内容：想主题、写例子、写字幕、出分镜。',
+      '用户没给主题——请你自己选一个**普通人的、有烟火气的**主题，不要宏大、不要科普、不要广告腔。',
+      '（若用户下面给了主题，就照着他给的写，别另起。）',
+      '主题：' + (o.topic || '（无，请自拟）'),
+      '（若用户给了具象例子，就把它用进某一句字幕里；没给就你自己写一个。）',
+      '具象例子：' + (o.example || '（无，请自拟）'),
+      '',
+      '这是' + eng + '渲染的片子。' + picture + '，没有真人实拍，也没有旁白，只有字幕和画面。',
+      '',
+      '硬性要求：',
+      '1) 主题要落在**一件具体的小事**上：一碗面、一把伞、一场推迟的告别、陪床的凌晨四点。',
+      '   不要"坚持梦想""科技向善"这种空词——观众看不懂画面里它在说啥。',
+      '2) 具象例子必须是**看得见的画面细节**：热气糊眼镜、塑料袋被风兜住、护士把枕头摆正。',
+      '   不是"很温暖很感动"，是那个具体的动作。',
+      '3) 字幕一共 ' + n + ' 段，每段不超过 22 字，要能一口气读完。第 1 段是开场（把人拉进来），',
+      '   中间要有细节和一个小转折，最后一段收尾，别喊口号。',
+      '4) 分镜的 place 必须只填给定的 id（英文），不要自造地名。',
+      '   镜头节奏：第 1 段 establish，中段轮 push / track / orbit，最后一段 pullout。',
+      '5) 只输出一个 JSON 对象，不要 markdown 代码块、不要解释、不要多余文字。',
+      '',
+      '格式：',
+      '{"topic":"一句话主题","example":"一个看得见的细节","title":"片名","scenes":[{"title":"小标题","text":"字幕"}],"shots":[{"place":"cafe","shotType":"push","mood":"warm","cast":["person"],"note":"不超过20字"}]}',
+      'scenes 和 shots 都是 ' + n + ' 项，一一对应。',
+      '可选 place id：' + FS.world.placeIds().join(' / '),
+      '可选 cast id：' + FS.cast.CASTS.map(function (c) { return c.id; }).join(' / '),
+      '可选 shotType：establish / push / track / orbit / pullout',
+      '可选 mood：day / dusk / night / warm / cold'
+    ].join('\n');
+  }
+
+  /** 一键成片：一次联网拿回全部内容；失败/没 Key 由调用方决定怎么回落 */
+  function auto(cfg, o) {
+    o = o || {};
+    if (!cfg || !cfg.key) return Promise.reject(new Error('没填 API Key'));
+    if (!FS.script || !FS.script.callApi) return Promise.reject(new Error('文案通道没就绪'));
+    return FS.script.callApi(cfg, autoPrompt(o), function (content) {
+      var s = String(content).replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+      var a = s.indexOf('{'), b = s.lastIndexOf('}');
+      if (a < 0 || b <= a) throw new Error('模型没输出 JSON');
+      var j = JSON.parse(s.slice(a, b + 1));
+      if (!j || !Array.isArray(j.scenes) || !j.scenes.length) throw new Error('JSON 里没有 scenes');
+      // 地点名统一翻译成 id（模型多半给中文），翻译不出来的留空，由本地白名单补
+      if (Array.isArray(j.shots)) {
+        j.shots.forEach(function (sh) { if (sh && typeof sh.place === 'string') sh.place = resolvePlace(sh.place) || sh.place; });
+      }
+      if (!Array.isArray(j.shots)) j.shots = [];
+      return j;
+    });
+  }
+
   function scenesText(scenes) {
     return (scenes || []).map(function (s, i) {
       return (i + 1) + '. ' + (s.title || '') + ' —— ' + (s.text || '');
@@ -600,6 +736,10 @@
     build: build,
     mergeLLM: mergeLLM,
     askLLM: askLLM,
+    auto: auto,
+    autoPrompt: autoPrompt,
+    resolvePlace: resolvePlace,
+    PLACE_ALIAS: PLACE_ALIAS,
     readText: readText,
     reconcile: reconcile,
     legalActions: legalActions,

@@ -943,6 +943,62 @@ FS.renderScore(fscParsed, { sampleRate: 22050 }).then((buf) => {
     ok('按钮已换掉 emoji 图标（用内联 SVG sprite）', uses >= 12, '(' + uses + ' 处)');
   })();
 
+  /* ---------- 一键成片（联网全自动） ---------- */
+  section('\n一键成片：主题 / 例子 / 文案 / 分镜 一次出齐');
+
+  ok('20 个地点都有中文别名表条目（漏一个，模型说中文就被白名单顶掉）',
+    FS.world.placeIds().every((id) => !!FS.director.PLACE_ALIAS[id]),
+    '(' + FS.world.placeIds().filter((id) => !FS.director.PLACE_ALIAS[id]).join(',') + ')');
+
+  ok('中文/繁体/日常叫法都能解析回 place id', (() => {
+    const cases = [['咖啡馆', 'cafe'], ['咖啡館', 'cafe'], ['便利店', 'cafe'], ['公园', 'park'],
+      ['海邊', 'seaside'], ['厨房里', 'kitchen'], ['菜市場', 'market'], ['地鐵', 'metro'],
+      ['雨中街道', 'rainstreet'], ['客廳', 'livingroom'], ['麵包房', 'bakery'], ['医院病房', 'hospital'],
+      ['田埂', 'farmfield'], ['公交站', 'busstop'], ['街道', 'street'], ['校园', 'campus'],
+      ['卧室', 'bedroom'], ['阳台', 'balcony'], ['办公室', 'office'], ['夜市', 'nightmarket'],
+      ['实验室', 'lab'], ['书房', 'study'], ['大排档', 'nightmarket'], ['超市', 'market']];
+    return cases.every((c) => FS.director.resolvePlace(c[0]) === c[1]);
+  })());
+
+  ok('认不出的地名返回 null（交回白名单顶，不乱猜）',
+    FS.director.resolvePlace('martini') === null && FS.director.resolvePlace('火星基地') === null);
+
+  ok('autoPrompt 没给主题时要求模型自拟', /用户没给主题/.test(FS.director.autoPrompt({ engine: '3d', count: 4 })));
+  ok('autoPrompt 把 20 个 place id 全列给模型了',
+    FS.world.placeIds().every((id) => FS.director.autoPrompt({ engine: '3d' }).indexOf(id) >= 0));
+  ok('autoPrompt 按引擎描述画面（3D 低多边形 / 2D 手绘）',
+    /低多边形 3D 生活场景/.test(FS.director.autoPrompt({ engine: '3d' })) &&
+    /Canvas2D 手绘的生活插画/.test(FS.director.autoPrompt({ engine: '2d' })));
+
+  ok('autoPrompt 要求场景落在具体小事上、不要空词',
+    /一件具体的小事/.test(FS.director.autoPrompt({ engine: '2d', count: 4 })));
+
+  // 模型顺影视语感给 crane（想拉远收尾），必须落到拉远，不能被 `|| 'push'` 兜底成推近
+  ok('导演说法 ↔ 渲染层镜头名对齐（crane / wide / follow / pan）', (() => {
+    const cases = [['crane', 'crane'], ['pullout', 'crane'], ['wide', 'orbit'],
+      ['establish', 'orbit'], ['push', 'dolly_in'], ['closeup', 'dolly_in']];
+    return cases.every((c) => {
+      const sb = FS.director.build({ title: 't', scenes: [{ title: '1', text: '街上的雨' }], bpm: 84, beats: 4, seed: 4242 });
+      const merged = FS.director.mergeLLM(sb, { shots: [{ place: 'rainstreet', shotType: c[0] }] });
+      return merged.shots[0].shot.type === c[1];
+    });
+  })());
+
+  ok('模型给的中文地点经 auto 翻译后，mergeLLM 不丢段', (() => {
+    const sb = FS.director.build({ title: '十点那一碗', scenes: [
+      { title: '还不到店', text: '下班的时候天已经黑透了' },
+      { title: '热气', text: '便利店关东煮的热气糊了我的眼镜' },
+      { title: '擦一下', text: '我抬手擦了一下，世界就清楚了一点' },
+      { title: '吃完', text: '十点那一碗面，把我接住了' }], bpm: 84, beats: 8, seed: null });
+    const merged = FS.director.mergeLLM(sb, { shots: [
+      { place: '街道', shotType: 'establish', cast: ['person'] },
+      { place: '便利店', shotType: 'push', cast: ['person'] },
+      { place: '客厅', shotType: 'track', cast: ['person'] },
+      { place: '菜市场', shotType: 'pullout', cast: ['person'] }] });
+    return merged.shots.length === 4 && merged.shots.every((s) =>
+      !!FS.world.placeById(s.place) && s.cast.length > 0 && !!s.shot && !!s.shot.type);
+  })());
+
   section('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败');
   process.exit(fail ? 1 : 0);
 }).catch((e) => {

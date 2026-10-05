@@ -1114,6 +1114,7 @@
   $('sw-go').addEventListener('click', function () {
     var mode = $('sw-mode').value;
     var opts = scriptOpts();
+    opts.engine = $('f-engine').value;   // 让模型知道自己在给哪种画面写字幕（2D 手绘 / 3D 低多边形生活场景）
     if (mode === 'llm') {
       opts.base = $('sw-base').value.trim();
       opts.key = $('sw-key').value.trim();

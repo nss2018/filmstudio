@@ -5,6 +5,7 @@
 'use strict';
 const path = require('path');
 global.window = global;
+require(path.join(__dirname, '..', 'js', 'theme.js'));   // 界面 + canvas 调色板（UI 层唯一真源）
 require(path.join(__dirname, '..', 'js', 'score.js'));
 require(path.join(__dirname, '..', 'js', 'wav.js'));
 require(path.join(__dirname, '..', 'js', 'synth.js'));
@@ -866,6 +867,82 @@ FS.renderScore(fscParsed, { sampleRate: 22050 }).then((buf) => {
   ok('调度出的音符数 > 0', scheduled.length > 0, '(' + scheduled.length + ' 个源)');
   ok('所有调度时间都非负', scheduled.every((s) => s.t >= 0));
   ok('渲染时长覆盖最后一个音', buf.duration >= fsc.duration * 0.9, '(' + buf.duration.toFixed(2) + 's)');
+
+  /* ---------- UI 主题：不黑、不紫（以后重排风格时别飘回去） ---------- */
+  (function () {
+    const fs = require('fs');
+    const path = require('path');
+    const ROOT = path.join(__dirname, '..');
+    const css = fs.readFileSync(path.join(ROOT, 'css', 'app.css'), 'utf8');
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+
+    /** hex → 亮度 l(0~1) + 色相 h(0~360)，用来判「黑」和「紫」 */
+    function hsl(hex) {
+      const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+      if (!m) return null;
+      const n = parseInt(m[1], 16);
+      const r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+      let h = 0;
+      if (d) {
+        if (mx === r) h = 60 * (((g - b) / d) % 6);
+        else if (mx === g) h = 60 * ((b - r) / d + 2);
+        else h = 60 * ((r - g) / d + 4);
+      }
+      return { l: (mx + mn) / 2, h: (h + 360) % 360 };
+    }
+    function scan(txt) {
+      const dark = [], purple = [];
+      const re = /#([0-9a-fA-F]{6})\b/g;
+      let m;
+      while ((m = re.exec(txt))) {
+        const c = hsl(m[1]);
+        if (!c) continue;
+        if (c.l < 0.12) dark.push('#' + m[1]);
+        if (c.h >= 250 && c.h <= 330) purple.push('#' + m[1] + '(h' + Math.round(c.h) + ')');
+      }
+      return { dark: dark, purple: purple };
+    }
+
+    const T = FS.theme;
+    ok('theme 调色板完整（纸面/墨色/线/语义色/8 轨色）',
+      !!(T.paper && T.card && T.trough && T.troughDeep && T.ink && T.ink2 && T.ink3 &&
+         T.rule && T.rule2 && T.accent && T.accentDeep && T.olive && T.brick && T.gold) &&
+      T.trail.length === 8);
+    ok('纸面三档都是亮色（L ≥ 0.8）',
+      [T.paper, T.card, T.trough, T.troughDeep].every((c) => hsl(c).l >= 0.8));
+
+    const cs = scan(css);
+    ok('UI 样式里没有纯黑 / 近黑（L < 0.12）', cs.dark.length === 0,
+      cs.dark.join(' ') || '(深棕墨 #33291F L=0.16 是刻意保留的文字墨色)');
+    ok('UI 样式里没有紫 / 蓝紫（色相 250°–330°）', cs.purple.length === 0, cs.purple.join(' ') || '');
+
+    const ts = scan(fs.readFileSync(path.join(ROOT, 'js', 'theme.js'), 'utf8'));
+    ok('canvas 调色板没有纯黑 / 近黑', ts.dark.length === 0, ts.dark.join(' ') || '');
+    ok('canvas 调色板没有紫 / 蓝紫', ts.purple.length === 0, ts.purple.join(' ') || '');
+    ok('卷帘 8 条轨色两两不同、都不黑不紫',
+      new Set(T.trail).size === 8 &&
+      T.trail.every((c) => { const h = hsl(c); return h.l >= 0.2 && !(h.h >= 250 && h.h <= 330); }));
+
+    // CSS 变量是 theme.js 的镜像：只改一边会立刻 fail
+    const root = /:root\{([\s\S]*?)\n\}/.exec(css);
+    ok('css :root 与 theme.js 逐字一致（改了一边忘改另一边会 fail）', (() => {
+      if (!root) return false;
+      const map = {};
+      root[1].replace(/(--[a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{6})/g, function (_, k, v) { map[k] = v.toLowerCase(); });
+      const pairs = { '--paper': T.paper, '--card': T.card, '--trough': T.trough, '--trough-deep': T.troughDeep,
+                      '--ink': T.ink, '--ink-2': T.ink2, '--ink-3': T.ink3,
+                      '--rule': T.rule, '--rule-2': T.rule2,
+                      '--accent': T.accent, '--accent-deep': T.accentDeep,
+                      '--olive': T.olive, '--brick': T.brick, '--gold': T.gold };
+      return Object.keys(pairs).every((k) => map[k] === pairs[k].toLowerCase());
+    })());
+
+    const uses = (html.match(/<use href="#i-/g) || []).length;
+    ok('index.html 挂了 theme.js（canvas 取色依赖它）', /<script src="js\/theme\.js/.test(html));
+    ok('按钮已换掉 emoji 图标（用内联 SVG sprite）', uses >= 12, '(' + uses + ' 处)');
+  })();
+
   section('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败');
   process.exit(fail ? 1 : 0);
 }).catch((e) => {

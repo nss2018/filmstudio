@@ -259,12 +259,12 @@
     var cv = $('wave'), g = cv.getContext('2d');
     var w = cv.width, h = cv.height;
     g.clearRect(0, 0, w, h);
-    g.fillStyle = '#0b0e15';
+    g.fillStyle = FS.theme.trough;
     g.fillRect(0, 0, w, h);
     var d = buf.getChannelData(0), n = d.length;
     var cols = Math.min(w, 640);
     var step = Math.max(1, Math.floor(n / cols));
-    g.strokeStyle = '#4dd0c7';
+    g.strokeStyle = FS.theme.accent;
     g.lineWidth = 1.5;
     g.beginPath();
     for (var i = 0; i < cols; i++) {
@@ -279,7 +279,7 @@
       i ? g.lineTo(i, y) : g.moveTo(i, y);
     }
     g.stroke();
-    g.strokeStyle = 'rgba(255,255,255,.08)';
+    g.strokeStyle = hexA(FS.theme.ink, .12);
     g.beginPath(); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
   }
 
@@ -503,7 +503,7 @@
     var cv = $('timeline'), g = cv.getContext('2d');
     var w = cv.width, h = cv.height;
     g.clearRect(0, 0, w, h);
-    g.fillStyle = '#0b0e15'; g.fillRect(0, 0, w, h);
+    g.fillStyle = FS.theme.trough; g.fillRect(0, 0, w, h);
     var tl = FS.story.timeline(film);
     var pad = 8, barY = 34, barH = 26;
     var x0 = pad, usable = w - pad * 2;
@@ -514,14 +514,14 @@
       var hovered = i === Math.floor((+($('f-scrub').value) / 1000) * tl.marks.length);
       g.fillStyle = hovered ? c.main : hexA(c.main, .28);
       g.fillRect(x, barY, Math.max(2, bw), barH);
-      g.fillStyle = 'rgba(255,255,255,.55)';
+      g.fillStyle = FS.theme.ink2;
       g.font = '11px ' + '"PingFang SC",sans-serif';
       g.fillText(String(i + 1), x + 4, barY + barH / 2 + 4);
     });
-    g.strokeStyle = 'rgba(255,255,255,.12)';
+    g.strokeStyle = hexA(FS.theme.ink, .18);
     g.strokeRect(x0, barY, usable, barH);
     var cur = x0 + usable * (+($('f-scrub').value) / 1000);
-    g.strokeStyle = '#fff'; g.lineWidth = 2;
+    g.strokeStyle = FS.theme.ink; g.lineWidth = 2;
     g.beginPath(); g.moveTo(cur, 10); g.lineTo(cur, h - 10); g.stroke();
   }
 

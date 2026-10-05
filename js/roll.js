@@ -13,7 +13,9 @@
 
   var PENTA = [0, 2, 4, 7, 9];                 // 五声音阶（大调）
   var DRUMS = { kick: 1, snare: 1, hat: 1, clap: 1 };
-  var TRAIL = ['#4dd0c7', '#7c8cff', '#ff9a5c', '#ffd166', '#59c2ff', '#f472b6', '#8ce99a', '#ff8fa3'];
+  // 轨道配色：全大地色系，无紫无黑。theme.js 没加载（比如只引了 roll.js）时退回内置一份，别白屏
+  var TRAIL = (FS.theme && FS.theme.trail) || ['#C05A38', '#2F6F7A', '#B8892B', '#6B7F45',
+                                               '#A8442E', '#5A6B84', '#C77C4E', '#4E6B45'];
 
   var LBLW = 96;      // 左侧轨名栏宽
   var RH = 20;        // 旋律格高
@@ -173,26 +175,26 @@
     layout();
 
     g.clearRect(0, 0, w, totalH + 8);
-    g.fillStyle = '#0b0e15';
+    g.fillStyle = FS.theme.trough;
     g.fillRect(0, 0, w, totalH + 8);
 
     var ty = 0;
     for (var i = 0; i < st.tracks.length; i++) {
       var t = st.tracks[i], h = trackH(t), col = trackColor(i);
       // 轨底
-      g.fillStyle = i % 2 ? '#0e121b' : '#0b0e15';
+      g.fillStyle = i % 2 ? FS.theme.troughDeep : FS.theme.trough;
       g.fillRect(LBLW, ty, w - LBLW, h);
 
       // 拍线（每 4 拍加粗）
       for (var c = 0; c < st.cols; c++) {
         var x = LBLW + c * CW;
-        g.fillStyle = c % 4 === 0 ? 'rgba(255,255,255,.13)' : 'rgba(255,255,255,.045)';
+        g.fillStyle = c % 4 === 0 ? hexA(FS.theme.ink, .14) : hexA(FS.theme.ink, .05);
         g.fillRect(x, ty + 1, 1, h - 2);
       }
       // 音高格线
       if (!isDrum(t.instrument)) {
         for (var r = 0; r <= ROWS; r++) {
-          g.fillStyle = 'rgba(255,255,255,.04)';
+          g.fillStyle = hexA(FS.theme.ink, .05);
           g.fillRect(LBLW, ty + r * RH, w - LBLW, 1);
         }
       }
@@ -204,7 +206,7 @@
         var ny = isDrum(t.instrument) ? ty + 7 : ty + (ROWS - 1 - midi2row(n.midi, root)) * RH;
         var nw = Math.max(6, n.dur * CW - 2), nh = isDrum(t.instrument) ? DRH - 14 : RH - 3;
         var on = (i === sel.track && k === sel.note);
-        g.fillStyle = on ? '#ffffff' : col;
+        g.fillStyle = on ? FS.theme.card : col;
         g.globalAlpha = on ? 1 : 0.92;
         roundRect(g, nx + 1, ny, nw, nh, 4);
         g.fill();
@@ -213,16 +215,16 @@
       });
 
       // 左侧标签
-      g.fillStyle = i === sel.track ? hexA(col, .22) : '#121725';
+      g.fillStyle = i === sel.track ? hexA(FS.theme.accent, .16) : FS.theme.troughDeep;
       g.fillRect(0, ty, LBLW, h);
       g.fillStyle = col;
       g.fillRect(0, ty, 3, h);
-      g.fillStyle = i === sel.track ? '#ffffff' : '#8fa0b8';
+      g.fillStyle = i === sel.track ? FS.theme.ink : FS.theme.ink2;
       g.font = (i === sel.track ? '600 ' : '') + '12px ' + '"PingFang SC",system-ui,sans-serif';
       g.textBaseline = 'middle'; g.textAlign = 'left';
       var nm = t.name.length > 6 ? t.name.slice(0, 6) : t.name;
       g.fillText(nm, 8, ty + (isDrum(t.instrument) ? DRH / 2 : 16));
-      g.fillStyle = 'rgba(255,255,255,.35)';
+      g.fillStyle = hexA(FS.theme.ink, .42);
       g.font = '10px ui-monospace,monospace';
       g.fillText(t.instrument, 8, ty + (isDrum(t.instrument) ? DRH - 9 : h - 8));
 
@@ -233,12 +235,12 @@
     if (head >= 0 && st.tracks.length) {
       var hx = LBLW + (head / spb()) * CW;
       if (hx <= w) {
-        g.fillStyle = 'rgba(255,255,255,.75)';
+        g.fillStyle = hexA(FS.theme.accent, .85);
         g.fillRect(hx, 0, 2, totalH);
       }
     }
     // 右侧可拖区提示
-    g.fillStyle = 'rgba(255,255,255,.25)';
+    g.fillStyle = hexA(FS.theme.ink, .4);
     g.font = '10px ui-monospace,monospace';
     g.textAlign = 'right';
     g.fillText('拍 →', w - 6, 10);

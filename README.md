@@ -311,7 +311,9 @@ node tests/node-test.js
 
 ```
 index.html         单页，四个区域（音乐工厂 / 配乐台 / 2D+3D 生成器）
-css/app.css        主题 / 布局 / 移动端适配
+css/app.css        主题 / 布局 / 移动端适配 —— Editorial 暖纸风格
+                   （米纸底 #F7F2E9 + 陶土朱 #C05A38 / 橄榄 #4E6B45 / 芥末黄 #B8892B，
+                   宋体标题 + 细墨线分栏，无黑底无紫；UI 的 canvas 也走同一套，见 js/theme.js）
 js/score.js        乐谱解析（人话报错，不抛裸 JSON 异常）
 js/wav.js          AudioBuffer -> 16-bit PCM wav
 js/synth.js        Web Audio 加法合成（12 音色），离线渲染

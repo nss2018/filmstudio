@@ -11,6 +11,7 @@ require(path.join(__dirname, '..', 'js', 'synth.js'));
 require(path.join(__dirname, '..', 'js', 'story.js'));
 require(path.join(__dirname, '..', 'js', 'factory.js'));
 require(path.join(__dirname, '..', 'js', 'roll.js'));
+require(path.join(__dirname, '..', 'js', 'script.js'));   // 服务商预设（火山方舟等）
 require(path.join(__dirname, '..', 'js', 'gl', 'core.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'lru.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'geom.js'));
@@ -543,6 +544,34 @@ ok('LLM 分镜并入后仍然合法（非法地点/角色被顶掉）', (() => {
 ok('LLM 段落数超出文案时不会多出镜头', (() => {
   const merged = FS.director.mergeLLM(sb, { shots: [{}, {}, {}, {}, {}, {}] });
   return merged.shots.length === sb.shots.length;
+})());
+/* 接火山方舟豆包（Doubao-Seed-2.0-Code）后加的：预设 + URL 拼装 + 新地点白名单 */
+ok('服务商预设里有火山方舟豆包', (() => {
+  const p = FS.script.PRESETS.filter((x) => x.id === 'ark')[0];
+  return !!(p && p.base === 'https://ark.cn-beijing.volces.com/api/v3' &&
+    p.model === 'doubao-seed-2-0-code-preview-260215');
+})());
+ok('火山方舟 base 不会被误补 /v1（结尾是 /v3 就该原样用）', (() => {
+  const p = FS.script.PRESETS.filter((x) => x.id === 'ark')[0];
+  let base = p.base.replace(/\/+$/, '');
+  if (!/\/v\d+$/.test(base)) base += '/v1';
+  return base + '/chat/completions' === 'https://ark.cn-beijing.volces.com/api/v3/chat/completions';
+})());
+ok('豆包分镜走白名单：world3 的 6 个新地点能被模型选、非法值被顶掉', (() => {
+  const m = FS.director.mergeLLM(sb, {
+    shots: [
+      { place: 'martini', shotType: 'explode', mood: 'neon', cast: ['fish', 'hospital'], note: '晚风' },
+      { place: 'bakery', shotType: 'push', mood: 'warm', cast: ['person'], note: '刚出炉' }
+    ]
+  });
+  if (!m.shots.every((s) => !!FS.world.placeById(s.place) && s.cast.every((c) =>
+    !!FS.cast.castById(c.id) && (FS.director.HABITAT[c.id] || []).includes(s.place)))) return false;
+  // 第 1 段模型给了不存在的地点/镜头/氛围，必须回落成本地合法值
+  const a = m.shots[0];
+  return !!FS.world.placeById(a.place) && !!a.shot.type && !!FS.director.GRADE[a.grade.mood] &&
+    a.cast.every((c) => Array.isArray(c.from) && c.from.length === 3) &&
+    ['livingroom', 'office', 'bakery', 'hospital', 'farmfield', 'busstop']
+      .some((id) => (FS.director.PLACE_WORDS[id] || []).length > 0);
 })());
 
 /* ---------- 11. 有界缓存（借鉴 digiCreature_ios 的 boxCache） ---------- */

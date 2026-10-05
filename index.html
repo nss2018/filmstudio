@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>科普宣传片工坊 · 配乐 + 渲染，一处出片</title>
-<link rel="stylesheet" href="css/app.css?v=20261005a">
+<link rel="stylesheet" href="css/app.css?v=20261005b">
 </head>
 <body>
 <header class="topbar">
@@ -188,6 +188,7 @@
                   <option value="openai">OpenAI</option>
                   <option value="silicon">硅基流动</option>
                   <option value="moonshot">Moonshot</option>
+                  <option value="ark">火山方舟 豆包 Doubao</option>
                   <option value="custom">自定义</option>
                 </select>
               </label>
@@ -195,7 +196,11 @@
               <label class="fl">Key<input type="password" id="sw-key" placeholder="sk-…" autocomplete="off"></label>
               <label class="fl">模型<input type="text" id="sw-model" placeholder="deepseek-chat"></label>
             </div>
-            <div class="hint">这里是<b>浏览器直连你的 API</b>，Key 只写在 localStorage，不经过本站任何服务器。有些服务不给浏览器跨域（CORS），直连会失败——这种情况把仓库里的 <code>workers/proxy.js</code> 贴到一个 Cloudflare Worker，Base 填那个 worker 地址就行，Key 可以改在 Worker 里更保险。</div>
+            <div class="hint">这里是<b>浏览器直连你的 API</b>，Key 只写在 localStorage，不进代码、不进 Git、不过本站任何服务器。<br>
+              <b>接豆包 / 火山方舟：</b>选上面的「火山方舟 豆包 Doubao」→ Base 和模型会自动填好，把
+              <a href="https://console.volcengine.com/ark/api_key" target="_blank" rel="noopener">方舟控制台</a>
+              里复制的 API Key 粘进 Key 框（打开页面时它会自动回填上次存的）。下方「导演 → AI 导演」就能用了。<br>
+              某些服务不给浏览器跨域（CORS），直连会失败——这种情况把仓库里的 <code>workers/proxy.js</code> 贴到一个 Cloudflare Worker，Base 填那个 worker 地址就行。</div>
           </div>
         </details>
       </div>
@@ -325,28 +330,28 @@
   <span class="mono" id="probe-badge"></span>
 </footer>
 
-<script src="js/score.js?v=20261005a"></script>
-<script src="js/wav.js?v=20261005a"></script>
-<script src="js/synth.js?v=20261005a"></script>
-<script src="js/story.js?v=20261005a"></script>
-<script src="js/factory.js?v=20261005a"></script>
-<script src="js/gl/core.js?v=20261005a"></script>
-<script src="js/gl/lru.js?v=20261005a"></script>
-<script src="js/gl/geom.js?v=20261005a"></script>
-<script src="js/gl/camera.js?v=20261005a"></script>
-<script src="js/gl/world.js?v=20261005a"></script>
-<script src="js/gl/cast.js?v=20261005a"></script>
-<script src="js/gl/render.js?v=20261005a"></script>
-<script src="js/director.js?v=20261005a"></script>
-<script src="js/gl/world2.js?v=20261005a"></script>
-<script src="js/gl/world3.js?v=20261005a"></script>
-<script src="js/scene2d/core.js?v=20261005a"></script>
-<script src="js/scene2d/scenes.js?v=20261005a"></script>
-<script src="js/scene2d/scenes2.js?v=20261005a"></script>
-<script src="js/scene2d/scenes3.js?v=20261005a"></script>
-<script src="js/scene2d/pick.js?v=20261005a"></script>
-<script src="js/roll.js?v=20261005a"></script>
-<script src="js/script.js?v=20261005a"></script>
-<script src="js/main.js?v=20261005a"></script>
+<script src="js/score.js?v=20261005b"></script>
+<script src="js/wav.js?v=20261005b"></script>
+<script src="js/synth.js?v=20261005b"></script>
+<script src="js/story.js?v=20261005b"></script>
+<script src="js/factory.js?v=20261005b"></script>
+<script src="js/gl/core.js?v=20261005b"></script>
+<script src="js/gl/lru.js?v=20261005b"></script>
+<script src="js/gl/geom.js?v=20261005b"></script>
+<script src="js/gl/camera.js?v=20261005b"></script>
+<script src="js/gl/world.js?v=20261005b"></script>
+<script src="js/gl/cast.js?v=20261005b"></script>
+<script src="js/gl/render.js?v=20261005b"></script>
+<script src="js/director.js?v=20261005b"></script>
+<script src="js/gl/world2.js?v=20261005b"></script>
+<script src="js/gl/world3.js?v=20261005b"></script>
+<script src="js/scene2d/core.js?v=20261005b"></script>
+<script src="js/scene2d/scenes.js?v=20261005b"></script>
+<script src="js/scene2d/scenes2.js?v=20261005b"></script>
+<script src="js/scene2d/scenes3.js?v=20261005b"></script>
+<script src="js/scene2d/pick.js?v=20261005b"></script>
+<script src="js/roll.js?v=20261005b"></script>
+<script src="js/script.js?v=20261005b"></script>
+<script src="js/main.js?v=20261005b"></script>
 </body>
 </html>

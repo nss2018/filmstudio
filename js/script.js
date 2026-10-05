@@ -205,6 +205,9 @@
     { id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
     { id: 'silicon', name: '硅基流动', base: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
     { id: 'moonshot', name: 'Moonshot', base: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+    // 火山方舟（豆包 Doubao）：/v3 结尾正好命中 callApi 里 /\/v\d+$/ 的分支，不会误补 /v1
+    { id: 'ark', name: '火山方舟 豆包', base: 'https://ark.cn-beijing.volces.com/api/v3',
+      model: 'doubao-seed-2-0-code-preview-260215' },
     { id: 'custom', name: '自定义', base: '', model: '' }
   ];
 

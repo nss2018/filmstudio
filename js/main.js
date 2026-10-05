@@ -846,10 +846,19 @@
         fPlaying = true;
         tickFilm.tok = driveToken();   // 记下本轮 token：被「停止」作废后 tickFilm 会自行退出
         $('f-preview').textContent = '❚❚ 播放中';
+        // 把「这次到底有没有人声、有没有配乐」写进状态行：以前配音挂了只有按钮复位，
+        // 用户听不到声音却不知道原因（2026-10-05「视频里没有文字语音合成」）。
+        var heard = [];
+        heard.push(plan && plan.length ? ('配音 ' + plan.length + ' 段') : '无配音');
+        heard.push((buf && film.music) ? '有配乐' : '无配乐');
+        hint($('f-status'), (plan && plan.narrFail ? '⚠ ' + plan.narrNote + ' · ' : '✓ ') + heard.join(' · '),
+          plan && plan.narrFail ? 'bad' : 'ok');
         tickFilm();
       });
     })['catch'](function (e) {
       $('f-preview').textContent = '▶ 预览播放';
+      // 以前这里只复位按钮，什么都不说 → 失败等于静默
+      hint($('f-status'), '✗ 播放没起来：' + (e && e.message ? e.message : '未知原因'), 'bad');
     });
   }
 
@@ -954,7 +963,13 @@
     if (narrCache[key]) return Promise.resolve(narrCache[key]);
     return fetch('tts.php?voice=' + encodeURIComponent(voice) + '&text=' + encodeURIComponent(text))
       .then(function (r) {
-        if (!r.ok) throw new Error('TTS 服务失败 ' + r.status + '（「' + text.slice(0, 10) + '…」）');
+        if (!r.ok) {
+          // 站点是纯静态时最容易撞 404：tts.php 没跟着部署，配音就整条哑掉。
+          // 这里把「服务器没这个文件」翻译成人话，别只甩一个数字。
+          if (r.status === 404) throw new Error('服务器上没有 tts.php（配音服务没跟着站点一起部署）');
+          if (r.status === 400) throw new Error('tts.php 拒了这段文案（单段限 90 字，或音色名不认）');
+          throw new Error('TTS 服务失败 ' + r.status + '（「' + text.slice(0, 10) + '…」）');
+        }
         return r.arrayBuffer();
       })
       .then(function (ab) { return c.decodeAudioData(ab); })
@@ -962,16 +977,21 @@
   }
 
   /** 生成 [{at, buf}]：at = 该段在时间轴上的起点。按顺序合成，
-      onProg(msg) 可选——把进度同步打到触发按钮上（状态条在页面顶部，用户盯着按钮看）。 */
+   *  onProg(msg) 可选——把进度同步打到触发按钮上（状态条在页面顶部，用户盯着按钮看）。
+   *  ⚠️ 返回值在 plan 数组上挂了 narrFail / narrNote 两个字段（数组本身照旧是 [{at,buf}]）：
+   *  以前「某一段合成失败」会让整条 Promise reject → filmPlay 的 catch 只把按钮复位，
+   *  用户看到的就是「点了播放没反应」，完全不知道是配音挂了（2026-10-05 反馈「没有语音合成」）。
+   *  现在逐段容错：成功的照常排程，失败的记下原因，片子照样出（画面 + 能合成的那几段）。 */
   function buildNarrPlan(st, c, onProg) {
     var voice = ($('f-voice') && $('f-voice').value) || '';
-    if (!voice) return Promise.resolve([]);
+    function bare(note) { var a = []; a.narrFail = 0; a.narrNote = note; return a; }
+    if (!voice) return Promise.resolve(bare('配音设为「无」'));
     var texts = st.scenes.map(function (s) { return (s.text || '').trim(); });
     var need = [];
     texts.forEach(function (tx, i) { if (tx) need.push(i); });
-    if (!need.length) return Promise.resolve([]);
+    if (!need.length) return Promise.resolve(bare('这一片没有文案，没有可念的内容'));
     var tl = FS.story.timeline(st);
-    var items = [], done = 0;
+    var items = [], done = 0, fail = 0, firstErr = '';
     function prog(msg) { hint($('f-status'), msg); if (onProg) onProg(msg); }
     prog('⏳ 合成配音 0/' + need.length + '…');
     return need.reduce(function (chain, idx) {
@@ -980,12 +1000,20 @@
           done++;
           prog('⏳ 合成配音 ' + done + '/' + need.length + '…');
           items.push({ at: tl.marks[idx] ? tl.marks[idx].start : 0, buf: buf });
+        })['catch'](function (e) {
+          done++; fail++;
+          if (!firstErr) firstErr = e.message;
+          prog('⏳ 合成配音 ' + done + '/' + need.length + '（第 ' + (idx + 1) + ' 段失败，继续）…');
         });
       });
     }, Promise.resolve()).then(function () {
-      prog('✓ 配音就绪（' + need.length + ' 段）');
+      items.narrFail = fail;
+      items.narrNote = fail
+        ? ('有 ' + fail + '/' + need.length + ' 段没合成出来：' + firstErr)
+        : ('配音 ' + need.length + ' 段就绪');
+      prog(fail ? '⚠ ' + items.narrNote : '✓ ' + items.narrNote);
       return items;
-    }, function (e) { prog('✗ ' + e.message); throw e; });
+    });
   }
 
   function narrStartAt(plan, c, baseTime, dest1, dest2) {
@@ -1125,12 +1153,19 @@
       var total = tl.total;
       var frames = Math.max(1, Math.ceil(total * EXPORT_FPS));
       var t0Wall = c.currentTime + 0.12;
-      node.start(t0Wall);
+      // ⚠️ node 只在「判为合拍」时才建。上一轮加了「不合拍就不配乐」后这里还写着
+      //    node.start(t0Wall) 无条件调用 → 不配乐时 node 是 null，直接抛 TypeError，
+      //    整条导出链 reject，表现为「点导出没反应/报 unknown」。（自己引入的回归）
+      if (node) node.start(t0Wall);
       narrStopAll();                               // 连续导出两次时清掉上一轮残留
       narrStartAt(plan, c, t0Wall, media, c.destination);   // 人声按时间轴录进流里 + 外放
       rec.start();
       fNode = node; fPlaying = false;                  // 导出不走播放逻辑，自己排帧
-      hint($('f-status'), '导出中… ' + (canPush ? '逐帧确定性模式' : '自动抓帧模式（该浏览器不支持手动推帧）'), 'ok');
+      var what = [];
+      if (buf) what.push('配乐'); else what.push('无配乐（' + (musicPlan().reason || '不合拍') + '）');
+      what.push(plan && plan.length ? ('配音 ' + plan.length + ' 段') : '无配音');
+      hint($('f-status'), '导出中… ' + (canPush ? '逐帧确定性模式' : '自动抓帧模式（该浏览器不支持手动推帧）') +
+        ' · 本次含：' + what.join(' + '), 'ok');
 
       var bar = $('f-progress');
       var wall0 = (root.performance && performance.now) ? performance.now() : Date.now();
@@ -1143,7 +1178,10 @@
         // 音频是实时的：画面推完了音频可能还在放，等它播完再收尾（音画才对得上）
         var remain = (t0Wall + total + 0.25) - c.currentTime;
         setTimeout(function () {
-          try { rec.stop(); node.stop(); node.disconnect(); } catch (e) {}
+          // rec 和 node 分开 try：以前写在一起，node 为 null 时 node.stop() 先抛，
+          // 连带把 rec.stop() 也跳过 → 录制停不下来、按钮一直卡在「导出中」。
+          try { rec.stop(); } catch (e) {}
+          try { if (node) { node.stop(); node.disconnect(); } } catch (e) {}
         }, Math.max(150, remain * 1000));
       }
 

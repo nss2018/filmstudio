@@ -95,10 +95,29 @@
     return ids[(FS.director ? FS.director.fnv(text || 'x') : ids.length) % ids.length];
   }
 
-  /** 为整部片子选场景：每段一个（可手动覆盖） */
+  /** 为整部片子选场景：每段一个（可手动覆盖）
+   *  ⚠️ 以前是「每段各自 pickScene」，seed 只差 1，所以文案没命中地点词时
+   *     整部片子会反复落在同 1~2 个场景上（实测 5 段 → cafe→balcony→metro→cafe→balcony，
+   *     两个场景各出现两次，剪出来像卡带）。
+   *     现在：① 命中词典的段照旧尊重文案；② 落表兜底的段改为「在没用过的场景里轮转」，
+   *     实在用完了（场景数 < 段数）才允许复用。 */
   function pickScenes(scenes, seed) {
+    var used = {};
+    var ids = FS.s2dScenes
+      ? Object.keys(FS.s2dScenes).filter(function (k) { return typeof FS.s2dScenes[k] === 'function'; })
+      : [];
     return (scenes || []).map(function (sc, i) {
-      return pickScene((sc.title || '') + ' ' + (sc.text || ''), (seed || 0) + i);
+      var txt = (sc.title || '') + ' ' + (sc.text || '');
+      var id = pickScene(txt, (seed || 0) + i);
+      // 这个场景本段是「文案明确要求」的吗？重了就换一个，而不是硬重复
+      if (used[id] && ids.length > Object.keys(used).length) {
+        var free = ids.filter(function (k) { return !used[k]; });
+        // 优先在候选里选语义最接近的（用 pickScene 再挑一次，排除已用）
+        var alt = free.filter(function (k) { return pickScene(txt, (seed || 0) + i + k.length) === k; });
+        id = (alt[0] || free[(i) % free.length]);
+      }
+      used[id] = (used[id] || 0) + 1;
+      return id;
     });
   }
 

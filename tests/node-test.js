@@ -1196,6 +1196,74 @@ const listMsg = function (cfg) {
       && FS.script.denyWord(404).indexOf('不存在') >= 0 && FS.script.denyWord(429).indexOf('限流') >= 0);
   }
 
+  /* ---------- 17. 2D 画面自检（2026-10-05：视频里没有文字 / 2D 动画有问题） ---------- */
+  section('\n17. 2D 画面：字幕必现 + 对比模板不塞 B + 场景不重复');
+  // 记录 fillText 内容的 canvas，用来断言「这句文案真的被画上去了」
+  function spyCtx() {
+    const g = stubCtx();
+    g.texts = [];
+    const realFont = g.font;
+    g.fillText = (t) => { g.texts.push(String(t)); g.calls++; };
+    void realFont;
+    return g;
+  }
+  const dfilm = {
+    title: '城市的一天', template: 'daily', palette: 'ink', bpm: 84, beats: 8, sub: 'on',
+    scenes: [
+      { title: '清晨的厨房', text: '锅里的水刚冒泡，蒸汽在窗户上留下一层薄薄的雾。' },
+      { title: '深夜的书桌', text: '台灯把一小圈光钉在桌面上，其余的都交给了夜。' }
+    ]
+  };
+  const dtl = FS.story.timeline(dfilm);
+  const dg = spyCtx();
+  FS.story.drawFrame(dg, dfilm, dtl.marks[0].dur * 0.6);
+  ok('daily 模板把文案画上去了（以前一个字都不画）',
+    dg.texts.indexOf(dfilm.scenes[0].text) >= 0, '(本帧共 ' + dg.texts.length + ' 处文字)');
+  ok('daily 也画段标题', dg.texts.indexOf('清晨的厨房') >= 0);
+
+  // 「字幕」开关关掉后，daily 也不该再画文案（跟其它母题保持一致）
+  const dfilm2 = JSON.parse(JSON.stringify(dfilm)); dfilm2.sub = 'off';
+  const dg2 = spyCtx();
+  FS.story.drawFrame(dg2, dfilm2, dtl.marks[0].dur * 0.6);
+  ok('字幕关掉后 daily 也不画文案', dg2.texts.indexOf(dfilm.scenes[0].text) < 0);
+
+  // 对比模板：标题没写 vs 时，以前右侧恒为字面量 'B'
+  function splitTexts(title) {
+    const st = {
+      title: 'x', template: 'split', palette: 'ink', bpm: 84, beats: 8, sub: 'on',
+      scenes: [{ title: title, text: '一句说明文案。' }, { title: 'b', text: 'x' }]
+    };
+    const t = FS.story.timeline(st);
+    const g = spyCtx();
+    FS.story.drawFrame(g, st, t.marks[0].dur * 0.95);
+    return g.texts;
+  }
+  ok('标题写 vs 能切出左右两项',
+    splitTexts('白天 vs 夜晚').indexOf('白天') >= 0 && splitTexts('白天 vs 夜晚').indexOf('夜晚') >= 0);
+  ok('「深圳比北京」能切成两栏（两侧都短）',
+    splitTexts('深圳比北京').indexOf('深圳') >= 0 && splitTexts('深圳比北京').indexOf('北京') >= 0);
+  ok('顿号并列能切两栏',
+    splitTexts('早高峰、深夜').indexOf('早高峰') >= 0 && splitTexts('早高峰、深夜').indexOf('深夜') >= 0);
+  ok('解析不出对比项时不再硬塞一个 B', splitTexts('一个普通标题').indexOf('B') < 0,
+    '(画了: ' + splitTexts('一个普通标题').join('/') + ')');
+  ok('长句不拿正文硬切（避免半截话）',
+    splitTexts('没有结构的普通段落说明文字').indexOf('B') < 0
+    && splitTexts('没有结构的普通段落说明文字').indexOf('一句说明文案') < 0);
+
+  // 场景重复：5 段文案都不含地点词时，不该反复落在同 1~2 个场景
+  const dupScenes = [
+    { title: '清晨', text: '锅里的水刚冒泡。' },
+    { title: '傍晚', text: '风把窗帘吹起来。' },
+    { title: '深夜', text: '路灯一盏盏亮着。' },
+    { title: '午后', text: '光斑落在地板上。' },
+    { title: '周末', text: '被子还没叠。' }
+  ];
+  const picked = FS.s2dPick.pickScenes(dupScenes, 7);
+  ok('自动选景：5 段不该全撞同一个场景',
+    new Set(picked).size >= 4, '(' + picked.join('→') + ')');
+  ok('自动选景：解析不出地点时不会退化成全 cafe',
+    picked.every((id) => typeof id === 'string' && id.length > 0));
+
   section('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败');
     process.exit(fail ? 1 : 0);
   })

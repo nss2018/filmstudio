@@ -250,33 +250,69 @@
   /* ---------------- 母题 4：对比演示（左右分屏） ---------------- */
   function drawSplit(g, story, sc, p, t, alpha) {
     var c = pal(story.palette);
-    var parts = (sc.title || '').split(/\s+(?:vs|VS|对比)\s+/);
-    var left = parts[0] || 'A', right = parts[1] || 'B';
-    var note = sc.text || '';
+    // ⚠️ 以前只认「标题里写死 vs/对比」，没写就退化成字面量 'A' / 'B'——
+    //    于是任何用「对比演示」模板的片子，右侧永远一个大写 B（用户 2026-10-05 反馈「2D 动画有问题」）。
+    // 解析优先级：① 标题里的 vs/对比/相比；② 标题里用「比/和/与」连接的两短句（两侧都 ≤8 字才算）；
+    //    ③ 标题按顿号/逗号切两段；④ 都不行就只画左半单栏，右半留空（宁可单栏也不硬塞一个字）。
+    //    ⚠️ 别拿正文去猜：正文是完整句子，切出来必然是「北京 一天里能走完的距离」这种半截话。
+    var raw = String(sc.title || '').trim();
+    var body = String(sc.text || '');
+    var left = '', right = '';
+    var m = raw.match(/^(.{1,14}?)\s*(?:vs|VS|Vs|versus|对比|相比)\s*(.{1,14})$/);
+    if (m) { left = m[1]; right = m[2]; }
+    if (!right) {
+      // 只在标题里找，且两侧都要短 —— 「深圳比北京」能切，「没有结构的普通段落说明」不能切
+      var m2 = raw.match(/^(.{1,8}?)\s*(?:比|和|与)\s*(.{1,8}?)$/);
+      if (m2) { left = m2[1]; right = m2[2]; }
+    }
+    if (!right) {
+      var seg = raw.split(/\s*[，,、；;]\s*/).filter(function (s) { return s; });
+      if (seg.length >= 2 && seg[0].length <= 8 && seg[1].length <= 8) { left = seg[0]; right = seg[1]; }
+    }
+    left = left.trim() || raw || '对比';
+    right = right.trim();
+    var two = !!right;                        // 只有真解析出右项才画分屏，否则单栏
+    var note = body;
 
     g.save();
     g.globalAlpha = alpha;
 
     var cx = W / 2;
-    var wLeft = cx * ease(p), wRight = W - wLeft;
+    var wLeft = two ? cx * ease(p) : W * ease(p);
+    var wRight = W - wLeft;
     var y0 = 190, h0 = H - 300;
 
     g.fillStyle = hexA(c.main, .16);
     g.fillRect(0, y0, wLeft, h0);
-    g.fillStyle = hexA(c.alt, .16);
-    g.fillRect(wLeft, y0, wRight, h0);
+    if (two) {
+      g.fillStyle = hexA(c.alt, .16);
+      g.fillRect(wLeft, y0, wRight, h0);
+    }
 
     g.strokeStyle = c.main; g.lineWidth = 3;
     g.beginPath(); g.moveTo(wLeft, y0 - 20); g.lineTo(wLeft, y0 + h0 + 20); g.stroke();
 
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillStyle = c.main; g.font = font(58, 700);
+    // 字号按「这一栏有多宽 / 词有多长」现算，写死 58px 会顶出格子；
+    // 补一个 measureText 实测兜底（估算对 latin 偏松，中文够用，两者取小）。
+    function fit(str, boxW) {
+      var est = Math.min(58, Math.max(22, (boxW - 70) / Math.max(2, str.length) * 1.6));
+      g.font = font(est, 700);
+      var w = g.measureText(str).width;
+      if (w > boxW - 70 && est > 22) g.font = font(Math.max(22, est * (boxW - 70) / w), 700);
+      return g.font;
+    }
+    g.fillStyle = c.main; g.font = fit(left, wLeft);
     g.fillText(left, wLeft / 2, y0 + h0 / 2);
-    g.fillStyle = c.alt;
-    g.fillText(right, wLeft + (W - wLeft) / 2, y0 + h0 / 2);
+    if (two) {
+      g.fillStyle = c.alt; g.font = fit(right, wRight);
+      g.fillText(right, wLeft + wRight / 2, y0 + h0 / 2);
+    }
 
-    g.fillStyle = c.text; g.font = font(46, 600);
-    g.fillText((sc.title || ''), W / 2, 110);
+    if (raw) {
+      g.fillStyle = c.text; g.font = font(46, 600);
+      g.fillText(raw, W / 2, 110);
+    }
 
     g.globalAlpha = alpha * smooth((p - .3) * 3.5);
     sub(g, story, sc, W / 2, H - 108, W - 300, 26, 400);
@@ -362,6 +398,25 @@
       g.fillStyle = pal(story.palette).text;
       g.textAlign = 'left';
       g.fillText(sc.title, 56, 66);
+      g.restore();
+    }
+    // ★ 字幕：生活场景模板以前**根本不画文案**，于是「生活场景」这种片子导出后
+    //   只有插画、看不到一句字（用户 2026-10-05 反馈「视频里没有文字」）。
+    //   插画本身是满屏的，所以先铺一条自下而上的暗色渐变把字托出来，
+    //   再走公共的 sub()（自动按宽度折行 + 超长缩字号 + 受「字幕」开关控制）。
+    if (sc.text) {
+      g.save();
+      g.globalAlpha = alpha;
+      var sg = g.createLinearGradient(0, H - 230, 0, H);
+      sg.addColorStop(0, 'rgba(0,0,0,0)');
+      sg.addColorStop(.42, 'rgba(0,0,0,.5)');
+      sg.addColorStop(1, 'rgba(0,0,0,.88)');
+      g.fillStyle = sg;
+      g.fillRect(0, H - 230, W, 230);
+      g.restore();
+      g.save();
+      g.globalAlpha = alpha * smooth(p * 5);   // 段内前 0.2 拍淡入，别跟场景抢镜
+      sub(g, story, sc, W / 2, H - 72, W - 300, 31, 600);
       g.restore();
     }
   }

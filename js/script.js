@@ -393,7 +393,7 @@
           path: '/chat/completions',
           key: key,
           payload: {
-            model: cfg.model || 'doubao-seed-1-6-251015',
+            model: cfg.model || DEFAULT_ARK_MODEL,
             temperature: 0.9,
             messages: [{ role: 'user', content: promptStr }]
           }

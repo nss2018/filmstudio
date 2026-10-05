@@ -575,6 +575,13 @@ ok('方舟「走本站代理」预设排在第一位（直连必被 CORS 拦）'
   return !!f && f.base === 'ai.php' && f.via === 'ark.cn-beijing.volces.com' &&
     FS.script.PRESETS[0].id === 'local-ark';
 })());
+// 兜底模型名只允许有一个来源：DEFAULT_ARK_MODEL。曾经同一份 script.js 里
+// 代理路径写 1-6、直连路径写 2-0-lite，两处不一致 → 用户按框里名字试就 401。
+ok('方舟兜底模型只有一个来源（不许散落硬编码模型名）', (() => {
+  const src = require('fs').readFileSync(path.join(__dirname, '..', 'js', 'script.js'), 'utf8');
+  const uniq = [...new Set(src.match(/doubao-seed-[A-Za-z0-9-]+/g) || [])];
+  return uniq.length === 1 && uniq[0] === FS.script.DEFAULT_ARK_MODEL;
+})());
 ok('isProxyBase 认得 ai.php、认不得普通地址', (() => {
   const f = FS.script.isProxyBase;
   return f('ai.php') && f('/filmstudio/ai.php') && !f('https://api.deepseek.com/v1') && !f('');

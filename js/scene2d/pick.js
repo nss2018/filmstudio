@@ -10,15 +10,30 @@
   'use strict';
   var FS = (root.FS = root.FS || {});
 
-  /** 2D 场景名 → 3D place id（用于共用词典） */
+  /** 2D 场景名 → 3D place id（用于共用词典）
+   *  同名的一并登记（livingroom/office/...），这样 pickScene 顺延时
+   *  会先走 TO_2D 反查到真实 2D 场景，而不是被 FALLBACK 抢走。 */
   var TO_3D = {
-    rainy: 'rainstreet'          // 2D 叫雨巷，3D 叫雨中街道
+    rainy: 'rainstreet',         // 2D 叫雨巷，3D 叫雨中街道
+    livingroom: 'livingroom', office: 'office', bakery: 'bakery',
+    hospital: 'hospital', farmfield: 'farmfield', busstop: 'busstop'
   };
   /** 3D 有、2D 没有的地点 → 语义最接近的 2D 场景（顺延时用）
-   *  kitchen(厨房) 2D 没画，退到 cafe（室内暖色生活，同一类）
-   *  lab(实验室)   2D 没画，退到 study（安静室内，有台灯）
+   *  kitchen(厨房)     2D 没画，退到 cafe（室内暖色生活，同一类）
+   *  lab(实验室)       2D 没画，退到 study（安静室内，有台灯）
+   *  livingroom(客厅)  屋里暖光 + 沙发，cafe 最像
+   *  bakery(面包房)    食物 + 暖光，还是 cafe
+   *  office(办公室)    都市室内，study 有书桌台灯
+   *  hospital(病房)    安静室内冷光，study
+   *  farmfield(田埂)   户外自然，park
+   *  busstop(公交站)   城市户外街景，street
+   *  ⚠️ 只有「3D 有、2D 也真画不出来」的地点才该进这张表（kitchen / lab）。
+   *     world3.js 那 6 个生活场景 2D 已补画（scenes3.js），必须登记进 TO_3D
+   *     而不是留在这里 —— FALLBACK 优先级低于 TO_2D，留着反而不会生效。
    */
-  var FALLBACK = { kitchen: 'cafe', lab: 'study' };
+  var FALLBACK = {
+    kitchen: 'cafe', lab: 'study'
+  };
 
   /** 3D place id → 2D 场景名 */
   var TO_2D = {};
@@ -46,7 +61,14 @@
       ['park', ['公园', '草地', '长椅', '林荫', '草坪']],
       ['study', ['书房', '书架', '阅读', '学习', '看书']],
       ['cafe', ['咖啡', '拿铁', '吧台', '烘焙']],
-      ['street', ['街道', '马路', '大楼', '霓虹', '都市']]
+      ['street', ['街道', '马路', '大楼', '霓虹', '都市']],
+      // ---- 第二批生活场景（scenes3.js 已补画 2D 版）----
+      ['livingroom', ['客厅', '沙发', '电视', '地毯', '家里', '回家', '居家', '落地灯']],
+      ['office', ['办公室', '办公', '工位', '加班', '上班', '写字楼', '会议室', '打卡']],
+      ['bakery', ['面包', '烤箱', '蛋糕', '早点', '早餐', '麦香', '面包房', '出炉']],
+      ['hospital', ['医院', '病房', '病床', '输液', '吊瓶', '生病', '陪护', '挂号']],
+      ['farmfield', ['麦田', '田埂', '田野', '稻田', '稻草人', '谷仓', '丰收', '麦浪']],
+      ['busstop', ['公交站', '公交车', '公交', '等车', '站牌', '巴士', '末班车', '车站']]
     ];
     for (var a = 0; a < ALIAS.length; a++) {
       for (var b = 0; b < ALIAS[a][1].length; b++) {

@@ -19,9 +19,11 @@ require(path.join(__dirname, '..', 'js', 'gl', 'world.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'cast.js'));
 require(path.join(__dirname, '..', 'js', 'director.js'));
 require(path.join(__dirname, '..', 'js', 'gl', 'world2.js'));
+require(path.join(__dirname, '..', 'js', 'gl', 'world3.js'));
 require(path.join(__dirname, '..', 'js', 'scene2d', 'core.js'));
 require(path.join(__dirname, '..', 'js', 'scene2d', 'scenes.js'));
 require(path.join(__dirname, '..', 'js', 'scene2d', 'scenes2.js'));
+require(path.join(__dirname, '..', 'js', 'scene2d', 'scenes3.js'));
 require(path.join(__dirname, '..', 'js', 'scene2d', 'pick.js'));
 const FS = global.FS;
 
@@ -329,7 +331,8 @@ ok('非均匀缩放后法线仍朝外（逆转置生效）', (() => {
 
 // 场景
 section('7. 生活场景库');
-ok('地点库有 14 个场景', FS.world.PLACES.length === 14, '(' + FS.world.PLACES.map((p) => p.name).join('、') + ')');
+ok('地点库有 20 个场景（3D 生活场景两批合计）', FS.world.PLACES.length === 20,
+  '(' + FS.world.PLACES.map((p) => p.name).join('、') + ')');
 const placeStat = FS.world.PLACES.map((p) => {
   const b = FS.world.buildPlace(p.id, FS.director.mkRng(1).f);
   return { id: p.id, tris: b.solid.idx.length / 3, lights: b.lights.length, sky: !!b.sky, fog: !!b.fog };
@@ -400,10 +403,23 @@ section('9b. 机位安全：室内不出墙、走廊不出廊、任何机位不�
   const D = FS.director;
   const CAM_R = D.CAM_R, CAM_BOX = D.CAM_BOX;
   // 与 director.placeIndoor 同步（新增 bedroom/metro 是室内）
-  const INDOOR = { cafe: 1, study: 1, lab: 1, kitchen: 1, bedroom: 1, metro: 1 };
-  // 与 world.js 同步：各地雾的 near/far（改了那边要同步）
+  // 与 director.placeIndoor 同步：4 批新增的室内场景都得登记（漏一个就漏一次机位钳制）
+  const INDOOR = { cafe: 1, study: 1, lab: 1, kitchen: 1, bedroom: 1, metro: 1,
+                   livingroom: 1, office: 1, bakery: 1, hospital: 1 };
+  // 与 world.js / world2.js / world3.js 同步：各地雾的 near/far（改了那几个文件要同步）
   const FOG = { cafe: [7, 26], street: [16, 62], park: [18, 70], seaside: [22, 80], study: [6, 22], lab: [8, 28], kitchen: [6, 22], nightmarket: [8, 34],
-    bedroom: [6, 20], market: [12, 40], metro: [8, 30], campus: [20, 62], rainstreet: [8, 34], balcony: [14, 52] };
+    bedroom: [6, 20], market: [12, 40], metro: [8, 30], campus: [20, 62], rainstreet: [8, 34], balcony: [14, 52],
+    livingroom: [7, 26], office: [9, 30], bakery: [7, 24], hospital: [9, 30], farmfield: [20, 70], busstop: [16, 56] };
+  // ⚠️ 回归：加新地点忘了往这两张表登记 → FOG[id][0] 直接把测试打崩（undefined[0]）
+  ok('机位安全表的 INDOOR/FOG 与 director 判定完全一致', (() => {
+    const bad = [];
+    FS.world.placeIds().forEach((id) => {
+      if (!FOG[id]) bad.push(id + ' FOG 缺登记');
+      const wantIndoor = FS.director.placeIndoor(id) ? 1 : 0;
+      if ((INDOOR[id] ? 1 : 0) !== wantIndoor) bad.push(id + ' INDOOR 判定不一致');
+    });
+    return bad.length === 0;
+  })(), '');
   let bad = 0, msg = '';
   FS.world.placeIds().forEach((place) => {
     const maxR = CAM_R[place] || 14;
@@ -658,7 +674,7 @@ section('13. 生活场景（2D 插画 + 3D 扩充）');
 // --- 2D 场景库 ---
 const S2D = FS.s2dScenes;
 const s2dIds = Object.keys(S2D.meta);
-ok('2D 生活场景有 12 个', s2dIds.length === 12, '(' + s2dIds.length + ' 个)');
+ok('2D 生活场景有 18 个（第二批 6 个已补画）', s2dIds.length === 18, '(' + s2dIds.length + ' 个)');
 ok('每个 2D 场景都有中文名与标签', s2dIds.every((k) => S2D.meta[k] && S2D.meta[k].name && S2D.meta[k].tags.length));
 ok('每个 2D 场景都有对应的 draw 函数', s2dIds.every((k) => typeof S2D[k] === 'function'));
 
@@ -676,7 +692,7 @@ function s2dCtx() {
   c.calls = () => n;
   return c;
 }
-ok('12 个 2D 场景 × 3 个时刻都能画且不抛异常', (() => {
+ok('18 个 2D 场景 × 3 个时刻都能画且不抛异常', (() => {
   const bad = [];
   s2dIds.forEach((id) => {
     [0, 1.7, 4.2].forEach((t) => {
@@ -714,6 +730,23 @@ ok('选景结果永远是 2D 画得出的场景', (() => {
                 '公园长椅', '夜市小吃', '菜市场', '校园操场', '咖啡馆', '书房', '街道'];
   return texts.every((t) => typeof S2D[FS.s2dPick.pickScene(t, 3)] === 'function');
 })());
+ok('新增 2D 生活场景能被文案直接命中（客厅/办公室/面包房/病房/田埂/公交站）', (() => {
+  const cases = [['客厅的沙发上电视还亮着', 'livingroom'], ['他在办公室加班到深夜', 'office'],
+                 ['面包房里烤箱冒着麦香', 'bakery'], ['医院病房里陪护', 'hospital'],
+                 ['麦田里的稻草人', 'farmfield'], ['公交站等末班车', 'busstop']];
+  const bad = [];
+  cases.forEach((c) => {
+    const got = FS.s2dPick.pickScene(c[0], 3);
+    // 必须既是真画得出的场景，又就是期望那一个（不能被 FALLBACK 顺延抢走）
+    if (typeof S2D[got] !== 'function' || got !== c[1]) bad.push(c[0] + '→' + got + '(期望 ' + c[1] + ')');
+  });
+  return bad.length === 0;
+})(), '');
+ok('3D 有 / 2D 没画的地点会顺延到画得出的场景（厨房→咖啡馆，实验室→书房）', (() => {
+  const f = FS.s2dPick.pickScene('在厨房煮汤', 3);
+  const g2 = FS.s2dPick.pickScene('实验室里的数据分析', 3);
+  return f === 'cafe' && g2 === 'study';
+})(), '(kitchen/lab 靠 pick.js 的 FALLBACK 顺延)');
 ok('选景可复现（同文案同参数 → 同一场景）', (() => {
   const a = FS.s2dPick.pickScene('下雨的夜晚', 5);
   const b = FS.s2dPick.pickScene('下雨的夜晚', 5);
@@ -721,11 +754,11 @@ ok('选景可复现（同文案同参数 → 同一场景）', (() => {
 })());
 
 // --- 3D 场景扩充 ---
-ok('3D 地点从 8 个扩到 14 个', FS.world.PLACES.length === 14,
+ok('3D 地点扩到 20 个（第二轮生活场景已入库）', FS.world.PLACES.length === 20,
   '(' + FS.world.PLACES.length + ' 个：' + FS.world.PLACES.map((x) => x.name).join('、') + ')');
-ok('新增的 6 个 3D 场景都在库里',
-  ['bedroom', 'market', 'metro', 'campus', 'rainstreet', 'balcony'].every((id) => !!FS.world.placeById(id)));
-ok('14 个 3D 地点都能建出几何 + 灯光 + 天空 + 雾', (() => {
+ok('新增的 6 个 3D 生活场景都在库里',
+  ['livingroom', 'office', 'bakery', 'hospital', 'farmfield', 'busstop'].every((id) => !!FS.world.placeById(id)));
+ok('全部 20 个 3D 地点都能建出几何 + 灯光 + 天空 + 雾', (() => {
   const bad = [];
   FS.world.placeIds().forEach((id) => {
     try {
@@ -736,7 +769,7 @@ ok('14 个 3D 地点都能建出几何 + 灯光 + 天空 + 雾', (() => {
   });
   return bad.length === 0;
 })(), '');
-ok('导演层认识全部 14 个地点（站位/关联/词典）', (() => {
+ok('导演层认识全部地点（站位/关联/词典，逐条查不靠数量凑）', (() => {
   const miss = FS.world.placeIds().filter((id) =>
     !FS.director.SPOTS[id] || !FS.director.RELATED[id] || !FS.director.PLACE_WORDS[id]);
   return miss.length === 0;
@@ -755,10 +788,17 @@ ok('每个角色都至少能待在一个已建场景里（reconcile 不会把地
   });
   return bad.length === 0;
 })(), '');
-ok('新增场景能被文案命中（卧室/菜市场/校园/雨夜/阳台）', (() => {
+ok('新增场景能被文案命中（卧室/菜市场/校园/雨夜/阳台 + 第二批 6 个）', (() => {
   const cases = [['卧室里的清晨', 'bedroom'], ['讨价还价的菜市场', 'market'],
                  ['同学在操场跑步', 'campus'], ['下雨撑伞走在街头', 'rainstreet'],
-                 ['阳台上晒太阳', 'balcony'], ['地铁通勤站台', 'metro']];
+                 ['阳台上晒太阳', 'balcony'], ['地铁通勤站台', 'metro'],
+                 // 第二批生活场景：客厅/办公室/面包房/病房/田埂/公交站
+                 ['客厅的沙发上，电视还亮着', 'livingroom'],
+                 ['他在办公室加班到深夜', 'office'],
+                 ['面包房里烤箱冒着麦香', 'bakery'],
+                 ['医院病房里陪护', 'hospital'],
+                 ['麦田里的稻草人站在田埂上', 'farmfield'],
+                 ['公交站等末班车', 'busstop']];
   const bad = [];
   cases.forEach(([text, want]) => {
     const got = FS.director.build({ title: text, scenes: [{ title: text, text }], seed: 7 }).place;
@@ -766,9 +806,11 @@ ok('新增场景能被文案命中（卧室/菜市场/校园/雨夜/阳台）', 
   });
   return bad.length === 0;
 })(), '');
-ok('室内判定包含新增的室内场景（卧室/地铁）',
-  FS.director.placeIndoor('bedroom') && FS.director.placeIndoor('metro') &&
-  !FS.director.placeIndoor('campus') && !FS.director.placeIndoor('balcony'));
+ok('室内判定覆盖全部室内场景（卧室/地铁/客厅/办公室/面包房/病房）',
+  ['bedroom', 'metro', 'livingroom', 'office', 'bakery', 'hospital']
+    .every((id) => FS.director.placeIndoor(id)) &&
+  ['campus', 'balcony', 'farmfield', 'busstop', 'park']
+    .every((id) => !FS.director.placeIndoor(id)));
 
 // --- daily 母题接进 story ---
 ok('2D 母题列表含 daily（生活场景）', FS.templates.indexOf('daily') >= 0, '(' + FS.templates.join(', ') + ')');

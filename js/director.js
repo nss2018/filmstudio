@@ -40,7 +40,17 @@
     metro: ['地铁', '站台', '地铁站', '车厢', '候车', '闸机', '通勤'],
     campus: ['校园', '学校', '操场', '教室', '操场', '同学', '校园里', '上课'],
     rainstreet: ['下雨', '雨天', '雨夜', '雨巷', '撑伞', '湿漉', '雨天街'],
-    balcony: ['阳台', '天台', '晒太阳', '晾衣', '楼下', '阳台上']
+    balcony: ['阳台', '天台', '晒太阳', '晾衣', '楼下', '阳台上'],
+    // ---- 第二批生活场景（world3.js）----
+    // 「沙发/电视/地毯/回家」：客厅的生活感全在这几个词上。不收单字「家」，
+    // 那会和「家国/大家」这类抽象词撞。
+    livingroom: ['客厅', '沙发', '电视', '地毯', '家里', '回家', '居家', '落地灯', '客厅里', '待在家'],
+    // 「显示器/工位/加班」归办公室；「屏幕/数据」留给 lab，别混。
+    office: ['办公室', '办公', '工位', '加班', '上班', '电脑', '显示器', '写字楼', '打卡', '会议室', '报表'],
+    bakery: ['面包', '烤箱', '蛋糕', '早餐', '早点', '出炉', '麦香', '面包房', '烤炉', '面包香', '甜面包'],
+    hospital: ['医院', '病房', '病床', '输液', '吊瓶', '生病', '挂号', '护士', '康复', '陪护', '体检'],
+    farmfield: ['麦田', '田埂', '田野', '稻田', '稻草人', '谷仓', '丰收', '麦浪', '农舍', '耕地', '种地'],
+    busstop: ['公交站', '公交', '巴士', '等车', '站牌', '候车亭', '公交车', '末班车', '车站']   // 「站台/候车」已归 metro，这里不抢
   };
 
   /** 角色关键词 → cast id */
@@ -68,13 +78,16 @@
   /** 角色只能在这些地方待着（不在列表里 = 该角色不该出现在此场景） */
   var HABITAT = {
     fish: ['seaside', 'park'],                                  // 水生：只在水边
-    butterfly: ['park', 'seaside', 'street', 'cafe', 'market', 'balcony', 'campus'],
-    bird: ['park', 'seaside', 'street', 'campus', 'balcony'],
-    cat: ['cafe', 'street', 'park', 'kitchen', 'study', 'nightmarket', 'bedroom', 'balcony', 'market'],
-    dog: ['park', 'street', 'seaside', 'cafe', 'nightmarket', 'rainstreet', 'campus', 'market', 'balcony'],
-    rabbit: ['park', 'street', 'seaside', 'balcony', 'campus'],
+    butterfly: ['park', 'seaside', 'street', 'cafe', 'market', 'balcony', 'campus', 'farmfield'],
+    bird: ['park', 'seaside', 'street', 'campus', 'balcony', 'farmfield', 'busstop', 'livingroom'],
+    cat: ['cafe', 'street', 'park', 'kitchen', 'study', 'nightmarket', 'bedroom', 'balcony', 'market',
+          'livingroom', 'office', 'bakery'],
+    dog: ['park', 'street', 'seaside', 'cafe', 'nightmarket', 'rainstreet', 'campus', 'market', 'balcony',
+          'livingroom', 'farmfield', 'busstop'],
+    rabbit: ['park', 'street', 'seaside', 'balcony', 'campus', 'farmfield'],
     person: ['cafe', 'street', 'park', 'seaside', 'study', 'lab', 'kitchen', 'nightmarket',
-             'bedroom', 'market', 'metro', 'campus', 'rainstreet', 'balcony']
+             'bedroom', 'market', 'metro', 'campus', 'rainstreet', 'balcony',
+             'livingroom', 'office', 'bakery', 'hospital', 'farmfield', 'busstop']
   };
 
   /** 情绪关键词 → 光线/氛围 */
@@ -100,7 +113,14 @@
     metro: { sit: [], stand: [[-3.2, -1.6], [-1.4, -2.2], [2.2, -1.4], [3.8, 0.4]] },
     campus: { sit: [], stand: [[-4.5, 3.4], [2.5, 4.2], [6, 2], [-6, 1]] },
     rainstreet: { sit: [], stand: [[-4.4, -3], [4.4, 2], [-3.4, 4], [2.6, -5]] },
-    balcony: { sit: [[3.4, -3.4]], stand: [[-2, 1.4], [1.4, 2], [-3.6, -1]] }
+    balcony: { sit: [[3.4, -3.4]], stand: [[-2, 1.4], [1.4, 2], [-3.6, -1]] },
+    // ---- 第二批（world3.js）：坐位贴着沙发/工位/陪客椅/长椅摆，别飘在墙里 ----
+    livingroom: { sit: [[-1.2, 2.6], [-0.4, 3.4]], stand: [[2.4, 2.6], [-3.2, -1.4], [1.6, -3.4]] },
+    office: { sit: [[-2.6, .2], [0, .3], [2.6, .1]], stand: [[-4.4, 2], [4.2, 2.6], [0, 3.2]] },
+    bakery: { sit: [], stand: [[-2.4, 3], [0, 3.4], [2.4, 2.8], [0, -1.6]] },
+    hospital: { sit: [[1.6, 2.6]], stand: [[-3.4, -2.4], [-1.4, 1.6], [3, -1]] },
+    farmfield: { sit: [], stand: [[0, 5.4], [-4, 3], [4, 4], [1.6, -1.2]] },
+    busstop: { sit: [[-0.3, 2.6]], stand: [[-2.6, 3.2], [2.2, 3.4], [0, 4.6]] }
   };
 
   /** 曲式：不同段数配不同镜头节奏 */
@@ -185,7 +205,10 @@
 
   function placeIndoor(id) {
     var p = FS.world.placeById(id);
-    return !!(p && ['cafe', 'study', 'lab', 'kitchen', 'bedroom', 'metro'].indexOf(id) >= 0);
+    // ⚠️ 这个列表是硬编码的，新加室内地点忘了登记 → 角色在屋里还能「跑/飞」，
+    //    机位也不收紧，会穿墙。world3.js 新增的 4 个室内场景必须同步进来。
+    return !!(p && ['cafe', 'study', 'lab', 'kitchen', 'bedroom', 'metro',
+                    'livingroom', 'office', 'bakery', 'hospital'].indexOf(id) >= 0);
   }
 
   /** 这个角色能不能出现在这个地点；不能的话给一个替代方案 */
@@ -451,7 +474,14 @@
     metro: ['street', 'rainstreet'],
     campus: ['park', 'street'],
     rainstreet: ['street', 'nightmarket', 'balcony'],
-    balcony: ['bedroom', 'seaside', 'park']
+    balcony: ['bedroom', 'seaside', 'park'],
+    // ---- 第二批（world3.js）----
+    livingroom: ['bedroom', 'kitchen', 'balcony'],
+    office: ['cafe', 'metro', 'street'],
+    bakery: ['kitchen', 'market', 'street'],
+    hospital: ['street', 'busstop', 'balcony'],
+    farmfield: ['park', 'seaside', 'balcony'],
+    busstop: ['metro', 'street', 'rainstreet']
   };
 
   function r3(x) { return Math.round(x * 1000) / 1000; }
